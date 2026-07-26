@@ -22,10 +22,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
   if (message?.type === "omeety_start_pick") {
-    // 再点一次 = 取消（toggle）
+    // 再点一次 = 完成当前连续选取（Esc 才是取消）
     if (pickActive) {
-      endPickMode()
-      chrome.runtime.sendMessage({ type: "omeety_pick_done", pick: null })
+      finishPickMode()
     } else {
       startPickMode()
     }
@@ -38,18 +37,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 let pickActive = false
 let pickHighlight = null
 let pickBanner = null
+let pickMoveFrame = 0
+let pickPointerX = 0
+let pickPointerY = 0
+let pickedElements = []
+const PICK_LIMIT = 20
 
 function startPickMode() {
   if (pickActive) return
   document.getElementById("omeety-pick-highlight")?.remove() // 清可能的残留（重载/异常）
   document.getElementById("omeety-pick-banner")?.remove()
+  clearPickMarkers()
+  pickedElements = []
   pickActive = true
   pickHighlight = document.createElement("div")
   pickHighlight.id = "omeety-pick-highlight"
   pickHighlight.style.display = "none"
   pickBanner = document.createElement("div")
   pickBanner.id = "omeety-pick-banner"
-  pickBanner.textContent = "点目标元素选取 · 点本提示或 Esc 取消"
+  pickBanner.textContent = "连续点选元素 · Enter/点此完成 · Esc 取消"
   document.body.appendChild(pickHighlight)
   document.body.appendChild(pickBanner)
   document.addEventListener("mousemove", onPickMove, true)
@@ -57,25 +63,99 @@ function startPickMode() {
   document.addEventListener("keydown", onPickKey, true)
 }
 
-function endPickMode() {
+function endPickMode({ keepMarkers = false } = {}) {
   if (!pickActive) return
   pickActive = false
   document.removeEventListener("mousemove", onPickMove, true)
   document.removeEventListener("click", onPickClick, true)
   document.removeEventListener("keydown", onPickKey, true)
+  if (pickMoveFrame) cancelAnimationFrame(pickMoveFrame)
+  pickMoveFrame = 0
   pickHighlight?.remove()
   pickBanner?.remove()
   pickHighlight = pickBanner = null
+  document.querySelectorAll('[data-omeety-pick-active="1"]').forEach((node) => node.removeAttribute("data-omeety-pick-active"))
+  if (!keepMarkers) clearPickMarkers()
+}
+
+function clearPickMarkers() {
+  document.querySelectorAll("[data-omeety-pick-id], [data-omeety-pick]").forEach((node) => {
+    node.removeAttribute("data-omeety-pick-id")
+    node.removeAttribute("data-omeety-pick")
+    node.removeAttribute("data-omeety-pick-active")
+  })
+}
+
+function describePick(el, uid) {
+  const r = el.getBoundingClientRect()
+  const href = el.href || el.closest?.("a[href]")?.href || null
+  return {
+    uid,
+    tag: el.tagName.toLowerCase(),
+    role: el.getAttribute("role") || null,
+    text: compactText(el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder") || ""),
+    label: compactText(el.getAttribute("aria-label") || el.getAttribute("title") || findLabel(el) || ""),
+    type: el.getAttribute("type") || null,
+    href,
+    selector: cssPath(el),
+    bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+    url: location.href,
+    capturedAt: new Date().toISOString(),
+  }
+}
+
+function syncPickedElements() {
+  pickedElements = pickedElements.filter((el) => el?.isConnected)
+  document.querySelectorAll("[data-omeety-pick-id], [data-omeety-pick]").forEach((node) => {
+    node.removeAttribute("data-omeety-pick-id")
+    node.removeAttribute("data-omeety-pick")
+  })
+  const picks = pickedElements.map((el, index) => {
+    const uid = `pick-${index + 1}`
+    el.setAttribute("data-omeety-pick-id", uid)
+    el.setAttribute("data-omeety-pick-active", "1")
+    return describePick(el, uid)
+  })
+  // Backward compatibility: uid:"pick" continues to target the most recently
+  // selected element, while pick-1..N address the complete selection.
+  pickedElements.at(-1)?.setAttribute("data-omeety-pick", "1")
+  if (pickBanner) pickBanner.textContent = `已选 ${picks.length} 个 · 继续点选 · Enter/点此完成 · Esc 取消`
+  return picks
+}
+
+function finishPickMode() {
+  if (!pickActive) return
+  const picks = syncPickedElements()
+  endPickMode({ keepMarkers: true })
+  chrome.runtime.sendMessage({ type: "omeety_pick_done", picks, cancelled: false })
+}
+
+function cancelPickMode() {
+  if (!pickActive) return
+  pickedElements = []
+  endPickMode()
+  chrome.runtime.sendMessage({ type: "omeety_pick_done", picks: [], cancelled: true })
 }
 
 function onPickMove(e) {
-  const el = document.elementFromPoint(e.clientX, e.clientY)
+  pickPointerX = e.clientX
+  pickPointerY = e.clientY
+  if (pickMoveFrame) return
+  // Mousemove can fire far faster than the display refresh rate. Resolve the
+  // target and its layout box at most once per frame to avoid forced-layout
+  // storms on complex pages while the picker is being used.
+  pickMoveFrame = requestAnimationFrame(updatePickHighlight)
+}
+
+function updatePickHighlight() {
+  pickMoveFrame = 0
+  if (!pickActive || !pickHighlight) return
+  const el = document.elementFromPoint(pickPointerX, pickPointerY)
   if (!el || el === pickHighlight || el === pickBanner || !el.getBoundingClientRect) return
   const r = el.getBoundingClientRect()
   if (!r.width || !r.height) return
   pickHighlight.style.display = "block"
-  pickHighlight.style.left = r.x + "px"
-  pickHighlight.style.top = r.y + "px"
+  pickHighlight.style.transform = `translate3d(${r.x}px, ${r.y}px, 0)`
   pickHighlight.style.width = r.width + "px"
   pickHighlight.style.height = r.height + "px"
 }
@@ -85,35 +165,34 @@ function onPickClick(e) {
   e.stopPropagation()
   e.stopImmediatePropagation()
   const el = document.elementFromPoint(e.clientX, e.clientY)
-  endPickMode()
-  if (!el || el === document.body || el === document.documentElement || el === pickBanner || el === pickHighlight) {
-    // 点了 banner / 高亮 / 空白 = 取消
-    chrome.runtime.sendMessage({ type: "omeety_pick_done", pick: null })
+  if (el === pickBanner) {
+    finishPickMode()
     return
   }
-  // 打上稳定 pick 标记，让 omeety_click(uid:"pick") 能精确再找到它（snapshot 不会清这个标记）
-  document.querySelectorAll('[data-omeety-pick="1"]').forEach((n) => n.removeAttribute("data-omeety-pick"))
-  el.setAttribute("data-omeety-pick", "1")
-  const r = el.getBoundingClientRect()
-  const pick = {
-    uid: "pick",
-    tag: el.tagName.toLowerCase(),
-    role: el.getAttribute("role") || null,
-    text: compactText(el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder") || ""),
-    selector: cssPath(el),
-    bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-    url: location.href,
-    capturedAt: new Date().toISOString(),
+  if (!el || el === document.body || el === document.documentElement || el === pickHighlight) return
+  const existing = pickedElements.indexOf(el)
+  if (existing >= 0) {
+    pickedElements.splice(existing, 1)
+    el.removeAttribute("data-omeety-pick-active")
+  } else if (pickedElements.length < PICK_LIMIT) {
+    pickedElements.push(el)
+  } else {
+    if (pickBanner) pickBanner.textContent = `最多选取 ${PICK_LIMIT} 个元素 · Enter/点此完成`
+    return
   }
-  chrome.runtime.sendMessage({ type: "omeety_pick_done", pick })
+  const picks = syncPickedElements()
+  chrome.runtime.sendMessage({ type: "omeety_pick_progress", picks })
 }
 
 function onPickKey(e) {
   if (e.key === "Escape") {
     e.preventDefault()
     e.stopPropagation()
-    endPickMode()
-    chrome.runtime.sendMessage({ type: "omeety_pick_done", pick: null })
+    cancelPickMode()
+  } else if (e.key === "Enter") {
+    e.preventDefault()
+    e.stopPropagation()
+    finishPickMode()
   }
 }
 
@@ -298,6 +377,7 @@ function findByUid(uid) {
   const hits = queryAllDeep(`[data-omeety-uid="${CSS.escape(u)}"]`)
   let el = hits[0] || null
   if (!el && u === "pick") el = queryAllDeep('[data-omeety-pick="1"]')[0] || null
+  if (!el && /^pick-\d+$/.test(u)) el = queryAllDeep(`[data-omeety-pick-id="${CSS.escape(u)}"]`)[0] || null
   if (!el) {
     throw new Error(`uid "${uid}" 不存在或已失效（页面可能重渲染过；重新 get_page_snapshot 或重新点 📌 选取）`)
   }
