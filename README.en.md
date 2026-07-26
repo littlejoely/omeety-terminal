@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
-[![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#browser-tools-28)
+[![MCP tools: 29](https://img.shields.io/badge/MCP_tools-29-5ee7b1?style=flat-square)](#browser-tools-29)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
 terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
 and any MCP-capable CLI the same eyes and hands for your active web page.**
 
 [3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
-[How it works](#how-it-works) · [28 browser tools](#browser-tools-28) ·
+[How it works](#how-it-works) · [29 browser tools](#browser-tools-29) ·
 [Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
 ![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
 
 > This reproducible demo uses a deterministic local MCP client and the real
 > extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
-> and Kimi Code use the same 28 tools. No model account or prerecorded model
+> and Kimi Code use the same browser tools. No model account or prerecorded model
 > response is involved.
 
 There is no dedicated chat mode or model switch. Omeety remains a real shell:
@@ -69,7 +69,9 @@ Then:
 1. Open `chrome://extensions` or `edge://extensions`, enable **Developer mode**, and choose **Load unpacked**.
 2. Select the repository's `extension` directory.
 3. Open Omeety from the toolbar and run `codex`, `claude`, or `kimi` in the real terminal.
-4. Ask the agent to **“describe the current page”**, or use **Pick** and tell it what to do with the selected element.
+4. Ask the agent to **“describe the current page”**, or click **Pick**, select
+   multiple elements, then press Enter/click **Finish picking**. Omeety inserts
+   the context into the current agent input line.
 
 Continue below for the full installation model, configuration locations, and
 uninstall steps, or download the [latest Release](https://github.com/littlejoely/omeety-terminal/releases/latest).
@@ -118,9 +120,11 @@ another closed agent:
 5. Add permission groups, read-only mode, and domain boundaries as optional
    safety layers rather than model-specific policy.
 
-The immediate priority is **reliability**: terminal I/O and browser tools must
-first report real outcomes, trustworthy failures, and survive navigation.
-Multi-selection and Context Bundles are the next focus.
+The immediate priorities are **reliability and measurable performance**:
+terminal I/O and browser tools must report real outcomes, survive navigation,
+and retain their resource/throughput baseline. Continuous selection now has
+stable references and terminal context injection; a standard Context Bundle is
+the next step.
 
 ## How it works
 
@@ -197,7 +201,7 @@ Then load the extension:
    that a real terminal has full local user permissions.
 2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
    `claude`, `codex`, or `kimi`.
-3. Inside an agent, verify that `omeety_terminal` and its 28 `omeety_*` tools
+3. Inside an agent, verify that `omeety_terminal` and its 29 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
 4. Use the settings button to select the system shell, zsh/bash/fish,
    PowerShell/cmd/Git Bash, or a custom shell executable.
@@ -217,12 +221,16 @@ Then load the extension:
   Shell window titles automatically become tab titles.
 - OSC 52 lets programs such as Claude Code, tmux, and Vim write to the system
   clipboard.
+- **Continuous picking:** click Pick, select several page elements (click one
+  again to remove it), then press Enter or Finish picking. Stable `pick-1..N`
+  references and a compact summary are inserted without an Enter keystroke.
 
-## Browser tools (28)
+## Browser tools (29)
 
 **Inspect and retrieve:** `omeety_get_page_snapshot`,
 `omeety_get_selected_context`, `omeety_capture_visible_tab`,
-`omeety_fetch_with_cookie`, `omeety_get_user_pick`, `omeety_list_tabs`, and
+`omeety_fetch_with_cookie`, `omeety_get_user_pick`,
+`omeety_get_user_picks`, `omeety_list_tabs`, and
 `omeety_get_console_logs`.
 
 **Operate:** `omeety_click`, `omeety_click_text`, `omeety_click_at`,

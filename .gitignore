@@ -27,6 +27,8 @@ _pwtest/*
 !_pwtest/test_ime_composition.py
 !_pwtest/test_browser_tool_reliability.py
 !_pwtest/test_settings_reconnect.py
+!_pwtest/test_performance_baseline.py
+!_pwtest/test_multi_pick.py
 !_pwtest/capture_launch_assets.py
 !_pwtest/launch_demo_agent.mjs
 

@@ -32,8 +32,8 @@ def ime_state(page):
             textarea: rect(textarea),
             rendered: cursor ? [cursor.x, cursor.y] : null,
             buffer: [t.buffer.active.cursorX, t.buffer.active.cursorY],
-            committed: host.dataset.omeetyCursorGuardCommitted || null,
-            imeAnchor: host.dataset.omeetyImeAnchor || null,
+            committed: host.dataset.omeetyCursorCommitted || null,
+            cursorGuard: host.dataset.omeetyCursorGuard || null,
             synchronized: Boolean(t._core?.coreService?.decPrivateModes?.synchronizedOutput),
           };
         }"""
@@ -109,7 +109,7 @@ def main():
                 page.wait_for_timeout(60)
                 baseline = ime_state(page)
                 assert baseline['active'], baseline
-                assert baseline['imeAnchor'] == 'committed-cursor', baseline
+                assert baseline['cursorGuard'] == 'stabilizer-v2', baseline
 
                 fragments = [
                     '\x1b[?2026h',

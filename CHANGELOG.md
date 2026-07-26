@@ -4,6 +4,29 @@ All notable public changes to Omeety Terminal are recorded here.
 
 Omeety Terminal 的重要公开变更记录在此处。
 
+## [Unreleased]
+
+### Added / 新增
+
+- Continuous multi-element picking with stable `pick-1..N` references,
+  `omeety_get_user_picks`, and safe no-Enter context injection into the active
+  terminal/Agent input line.
+- A real Edge/Native Messaging/ConPTY/WebGL performance baseline covering idle
+  main-thread cost, output throughput, heap/DOM size, and terminal-tab cleanup.
+
+### Performance / 性能
+
+- Replace replay-buffer `Array.shift()` eviction with an amortized O(1) bounded
+  queue for high-frequency PTY output.
+- Limit picker hit-testing and layout reads to once per animation frame and
+  remove lagging highlight-position transitions.
+
+### Fixed / 修复
+
+- Commit the final WebGL cursor model and IME textarea anchor when an xterm
+  synchronized-output transaction ends; the buffer no longer advances while
+  the rendered cursor remains at its pre-transaction position.
+
 ## [0.1.1] - 2026-07-26
 
 macOS Chrome support / macOS Chrome 支持。

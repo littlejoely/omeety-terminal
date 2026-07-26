@@ -95,7 +95,14 @@ def main():
                 final_cursor = cursor_tuple(final)
                 buffer_cursor = (final.get('cursorX'), final.get('cursorY'))
                 assert final.get('synchronizedOutput') is False
-                assert final_cursor == buffer_cursor
+                assert final_cursor == buffer_cursor, json.dumps(
+                    {
+                        'finalRenderedCursor': final_cursor,
+                        'finalBufferCursor': buffer_cursor,
+                        'finalState': final,
+                    },
+                    ensure_ascii=False,
+                )
                 assert final_cursor != baseline_cursor
                 assert not errors
 
