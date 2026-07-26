@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused improvement that fits Omeety's terminal/exoskeleton role
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the workflow limitation, not only the desired UI.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Product fit
+      options:
+        - label: This keeps Omeety a real terminal and remains agent/model neutral.
+          required: true
