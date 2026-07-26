@@ -2,14 +2,64 @@
 
 **简体中文** | [English](README.en.md)
 
-浏览器（Edge/Chrome）侧栏里的**真·终端**，并且**预接浏览器操控 MCP**：在里面敲 `claude` / `codex` / `kimi`（或任何支持 MCP 的 CLI），它们就**自动能看见并操作你当前打开的网页**。
+[![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-8aa4ff?style=flat-square)](#已知限制--安全)
+[![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#支持的浏览器工具28-个agent-自动可用)
 
-这是一个自行开发的实验性项目，不是 OpenAI、Anthropic、Moonshot AI、
+**Omeety Terminal 是 CLI Agent 的浏览器外骨骼：把真实本地终端放进
+Edge/Chrome 侧栏，让 Codex、Claude Code、Kimi Code 以及任何支持 MCP 的
+CLI Agent 共用当前网页的同一双眼睛和手。**
+
+[3 分钟快速开始](#3-分钟快速开始) · [为什么是 Omeety](#为什么是-omeety) ·
+[工作原理](#它怎么工作一张图) · [28 个浏览器工具](#支持的浏览器工具28-个agent-自动可用) ·
+[安全边界](#已知限制--安全) · [参与开发](CONTRIBUTING.md)
+
+![Omeety 通过真实 MCP 路径读取并操作当前标签页](docs/images/omeety-demo.gif)
+
+> 上面的可复现演示使用确定性的本地 MCP 客户端，实际经过扩展、Native
+> Messaging、ConPTY 和浏览器工具；Codex、Claude Code、Kimi Code 使用同一套
+> 28 个工具。演示不依赖模型账号或预录的模型回答。
+
+没有专用聊天模式，也没有模型切换按钮——它就是一个真实 shell。你仍然可以运行
+`git`、`npm`、`claude`、`codex`、`kimi` 或任意本地命令；区别是里面的 Agent
+自动获得了当前浏览器标签页的感知和操作能力。
+
+这是一个独立开发的 Windows Beta 项目，不是 OpenAI、Anthropic、Moonshot AI、
 Microsoft 或 xterm.js 的官方产品。
 
-![Omeety Terminal 在 Microsoft Edge 侧栏中运行](docs/images/omeety-terminal.png)
+## 为什么是 Omeety
 
-没有切换按钮——它就是个真实 shell（PowerShell/cmd/自定义），想跑啥敲啥（`git`、`npm`、`claude`、`codex`、`kimi`…）。浏览器工具在安装时一次性写进各 AI 的配置，所以"开箱即用"。
+| 能力 | Omeety Terminal | 常见独立 Browser MCP | 集成式桌面 Agent |
+|---|:---:|:---:|:---:|
+| 操作你正在使用、已经登录的浏览器标签页 | ✅ | 视实现而定 | 视产品而定 |
+| 真实本地 PTY / 普通 Shell | ✅ | — | 通常不是 |
+| Codex、Claude Code、Kimi Code 共用一套能力 | ✅ | 部分支持 | 通常绑定自家 Agent |
+| Agent / 模型中立的 MCP 工具契约 | ✅ | ✅ | 通常不是 |
+| 页面元素选取、截图、Console、真实 CDP 输入 | ✅ | 视实现而定 | 视产品而定 |
+| 本地桥接；MCP 仅监听 `127.0.0.1` | ✅ | 视实现而定 | 视产品而定 |
+| 提交、删除、保存等危险操作保留确认 | ✅ | 视实现而定 | 视产品而定 |
+
+## 3 分钟快速开始
+
+当前版本已在 **Windows 11 + Microsoft Edge** 验证。先安装 Node.js LTS，以及
+你准备使用的 `codex`、`claude` 或 `kimi` CLI。
+
+```powershell
+git clone https://github.com/littlejoely/omeety-terminal.git
+cd omeety-terminal
+powershell -ExecutionPolicy Bypass -File installer\install.ps1
+```
+
+然后：
+
+1. 打开 `edge://extensions` → 开启开发者模式 → **加载已解压的扩展**。
+2. 选择仓库里的 `extension` 文件夹。
+3. 点击 Omeety 图标打开侧栏，在真实终端里运行 `codex`、`claude` 或 `kimi`。
+4. 对 Agent 说：**“描述当前网页”**，或点侧栏的**选取**后让它操作目标元素。
+
+需要完整安装原理、配置位置和卸载步骤，请继续阅读下文。也可以直接下载
+[最新 Release](https://github.com/littlejoely/omeety-terminal/releases/latest)。
 
 ## 产品定位：Agent 的浏览器外骨骼
 
@@ -63,7 +113,7 @@ Microsoft 或 xterm.js 的官方产品。
 
 需要：**Node.js（建议 LTS）** 已安装。已装的 `claude` / `codex` / `kimi` 会被自动配上浏览器工具。
 
-## 安装（一次性）
+## 完整安装说明
 
 ```powershell
 # 在项目根目录
@@ -154,3 +204,7 @@ _pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
 
 Omeety Terminal 使用 [MIT License](LICENSE) 开源。项目包含的第三方组件保留
 各自的版权和许可声明，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+如果 Omeety 的确帮你减少了浏览器与工具之间的切换，欢迎给仓库一个 Star。
+Bug 报告和范围清晰的 Pull Request 也都欢迎，参与方式见
+[`CONTRIBUTING.md`](CONTRIBUTING.md)。

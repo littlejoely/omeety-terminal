@@ -25,6 +25,9 @@ _pwtest/*
 !_pwtest/test_cursor_active_codex.py
 !_pwtest/test_ime_composition.py
 !_pwtest/test_browser_tool_reliability.py
+!_pwtest/test_settings_reconnect.py
+!_pwtest/capture_launch_assets.py
+!_pwtest/launch_demo_agent.mjs
 
 # Logs, screenshots, backups, and editor/OS state
 *.log

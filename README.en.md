@@ -2,20 +2,66 @@
 
 [简体中文](README.md) | **English**
 
-A **real terminal in the Edge/Chrome side panel**, preconfigured with a
-**browser-control MCP server**. Run `claude`, `codex`, `kimi`, or any other
-MCP-capable CLI inside it, and the agent can inspect and operate the web page
-currently open in your browser.
+[![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-8aa4ff?style=flat-square)](#known-limitations-and-security)
+[![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#browser-tools-28)
 
-This is an independently developed experimental project. It is not an official
-product of OpenAI, Anthropic, Moonshot AI, Microsoft, or xterm.js.
+**Omeety Terminal is a browser exoskeleton for CLI agents: a real local
+terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
+and any MCP-capable CLI the same eyes and hands for your active web page.**
 
-![Omeety Terminal running in the Microsoft Edge side panel](docs/images/omeety-terminal.png)
+[3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
+[How it works](#how-it-works) · [28 browser tools](#browser-tools-28) ·
+[Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
-There is no special mode switch: it is a real shell (PowerShell, cmd, or a
-custom shell), so you can run normal commands such as `git`, `npm`, `claude`,
-`codex`, and `kimi`. The installer adds the browser MCP endpoint to supported
-agent configurations once, making the browser tools available automatically.
+![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
+
+> This reproducible demo uses a deterministic local MCP client and the real
+> extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
+> and Kimi Code use the same 28 tools. No model account or prerecorded model
+> response is involved.
+
+There is no dedicated chat mode or model switch. Omeety remains a real shell:
+run `git`, `npm`, `claude`, `codex`, `kimi`, or any local command as usual. The
+difference is that agents inside it automatically gain reliable perception and
+control of the browser tab you are already using.
+
+This is an independently developed Windows beta. It is not an official product
+of OpenAI, Anthropic, Moonshot AI, Microsoft, or xterm.js.
+
+## Why Omeety
+
+| Capability | Omeety Terminal | Typical standalone Browser MCP | Integrated desktop agent |
+|---|:---:|:---:|:---:|
+| Operates the browser tab you are already using and logged into | ✅ | Varies | Varies |
+| Real local PTY and ordinary shell | ✅ | — | Usually no |
+| One browser layer for Codex, Claude Code, and Kimi Code | ✅ | Partial | Usually vendor-bound |
+| Agent- and model-neutral MCP contract | ✅ | ✅ | Usually no |
+| Element picker, screenshots, Console, and trusted CDP input | ✅ | Varies | Varies |
+| Local bridge; MCP binds only to `127.0.0.1` | ✅ | Varies | Varies |
+| Confirmation boundary for submit/delete/save actions | ✅ | Varies | Varies |
+
+## 3-minute quick start
+
+The current release is verified on **Windows 11 with Microsoft Edge**. Install
+Node.js LTS and at least one CLI you plan to use: `codex`, `claude`, or `kimi`.
+
+```powershell
+git clone https://github.com/littlejoely/omeety-terminal.git
+cd omeety-terminal
+powershell -ExecutionPolicy Bypass -File installer\install.ps1
+```
+
+Then:
+
+1. Open `edge://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+2. Select the repository's `extension` directory.
+3. Open Omeety from the toolbar and run `codex`, `claude`, or `kimi` in the real terminal.
+4. Ask the agent to **“describe the current page”**, or use **Pick** and tell it what to do with the selected element.
+
+Continue below for the full installation model, configuration locations, and
+uninstall steps, or download the [latest Release](https://github.com/littlejoely/omeety-terminal/releases/latest).
 
 ## Product role: a browser exoskeleton for agents
 
@@ -93,7 +139,7 @@ a separate always-on service, token, or handshake.
 Install **Node.js (LTS recommended)** first. The installer configures browser
 tools for any detected Claude Code, Codex CLI, and Kimi Code installations.
 
-## Install once
+## Full installation details
 
 ```powershell
 # From the repository root
@@ -221,3 +267,7 @@ _pwtest/      Headed Edge regression probes safe for public reproduction
 Omeety Terminal is released under the [MIT License](LICENSE). Third-party
 components retain their respective copyrights and licenses; see
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+If Omeety saves you a browser/tool-switching step, consider starring the
+repository. Bug reports and focused pull requests are welcome; see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).

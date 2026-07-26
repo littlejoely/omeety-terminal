@@ -116,7 +116,7 @@ chrome.runtime.onConnect.addListener((port) => {
   // 不在此处主动回放：面板此时还没建 tab，回放会路由不到任何终端被丢弃。
   // 面板建好 tab 后会发 replay_request（见下）。
   port.onMessage.addListener(async (m) => {
-    if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "shutdown" || m?.type === "list_tools") {
+    if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "restart" || m?.type === "shutdown" || m?.type === "list_tools") {
       sendNative(m)
     } else if (m?.type === "replay_request") {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，

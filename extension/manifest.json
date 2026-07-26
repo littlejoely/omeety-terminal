@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Omeety Terminal",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "浏览器内真终端，预接浏览器操控 MCP：在里面敲 claude/codex/kimi 即可自动操作当前网页。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkmNuM7oq4nEPOODiEaXz5eQLnvjCLXewls+UGdncICSzMLdV9lTdOIcRPH1PhyHa93dBqSrJ/Mfi8pcyRJorfBQNnUzgSUBa+h4cQav5NKfu23QRIchf9USTZENVRBgiKDKvvEBwdiu9oI7iFbCB4HIqePr/w1SHnspKKyBt+IToOeYixAW+CEMsOXWh/Xp+UA32GwMz1khWin6ShB6/u7OMwUTE98uTnFTjjQtP8kSD+XhJcN6GD3WPBHTPV2yBaaZCPlVYfTvZtHznINM3IpB+NcIwR/eu5KESFGADLH77tq/tgUkCbUq1vabmZIiNrBmUrm5+rpg5GA+JiZ91VQIDAQAB",
   "permissions": ["sidePanel", "storage", "tabs", "scripting", "activeTab", "nativeMessaging", "clipboardRead", "clipboardWrite", "offscreen", "debugger"],

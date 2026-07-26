@@ -34,6 +34,14 @@ function showView(name) {
   }
 }
 
+function setSettingsOpen(open) {
+  showView(open ? "settings" : "terminal")
+  const toggle = $("settingsToggle")
+  toggle.textContent = open ? "×" : "⚙"
+  toggle.classList.toggle("danger", open)
+  toggle.title = open ? "退出设置" : "设置"
+}
+
 function resolvedShell() {
   return shellSelect.value === "custom" ? shellCustom.value.trim() : shellSelect.value
 }
@@ -206,7 +214,7 @@ function renderTabs() {
 }
 
 // ---------- native 桥 ----------
-function connectPanel(forceRespawn = false) {
+function connectPanel() {
   if (panelPort) {
     try {
       panelPort.disconnect()
@@ -259,16 +267,20 @@ function connectPanel(forceRespawn = false) {
   })
   panelPort.onDisconnect.addListener(() => setStatus("err", "与后台连接断开"))
 
-  // 首次：建第一个 tab；重连：重新 hello 已有 tab。
-  // forceRespawn（改 shell 保存时）：先 shutdown 旧 PTY，host 收到后 hello 才会用新 shell 重 spawn，
-  // 否则 host 见旧 PTY 还在只 resize → 换 shell 是假动作。
+  // 首次：建第一个 tab；面板重开：重新 hello 已有 tab。
   if (tabs.size === 0) {
     newTab()
   } else {
     for (const sid of tabs.keys()) {
-      if (forceRespawn) send({ type: "shutdown", sid })
       send({ type: "hello", sid, shell: resolvedShell(), cols: curSettings.cols, rows: curSettings.rows })
     }
+  }
+}
+
+function restartTerminals(shell) {
+  setStatus("", "正在重连…")
+  for (const sid of tabs.keys()) {
+    send({ type: "restart", sid, shell, cols: curSettings.cols, rows: curSettings.rows })
   }
 }
 
@@ -280,13 +292,11 @@ function applyAckGate() {
 // ---------- 启动 ----------
 ;(async () => {
   curSettings = await loadSettings()
-  shellSelect.value =
-    curSettings.shell === "cmd" || curSettings.shell === "pwsh" || curSettings.shell === "gitbash" || curSettings.shell === "custom"
-      ? curSettings.shell
-      : "powershell"
+  const builtInShells = new Set(["powershell", "cmd", "pwsh", "gitbash"])
+  shellSelect.value = builtInShells.has(curSettings.shell) ? curSettings.shell : "custom"
   if (shellSelect.value === "custom") {
     shellCustom.hidden = false
-    shellCustom.value = curSettings.shell.startsWith("C:") ? curSettings.shell : ""
+    shellCustom.value = curSettings.shell || ""
   }
   applyAckGate()
 
@@ -342,14 +352,10 @@ document.addEventListener("keydown", (e) => {
 
 $("settingsToggle").addEventListener("click", () => {
   const willEnterSettings = !settingsView.classList.contains("active")
-  showView(willEnterSettings ? "settings" : "terminal")
-  $("settingsToggle").textContent = willEnterSettings ? "×" : "⚙"
-  $("settingsToggle").classList.toggle("danger", willEnterSettings)
+  setSettingsOpen(willEnterSettings)
 })
 $("backBtn").addEventListener("click", () => {
-  showView("terminal")
-  $("settingsToggle").textContent = "⚙"
-  $("settingsToggle").classList.remove("danger")
+  setSettingsOpen(false)
 })
 
 shellSelect.addEventListener("change", () => {
@@ -358,9 +364,17 @@ shellSelect.addEventListener("change", () => {
 
 $("saveBtn").addEventListener("click", async () => {
   const shell = resolvedShell() || "powershell"
-  curSettings = await saveSettings({ shell })
-  showView("terminal")
-  connectPanel(true) // forceRespawn：先杀旧 PTY，再用新 shell 重 spawn（否则 host 只 resize 不换 shell）
+  const button = $("saveBtn")
+  button.disabled = true
+  try {
+    curSettings = await saveSettings({ shell })
+    setSettingsOpen(false)
+    restartTerminals(shell)
+  } catch (error) {
+    setStatus("err", `保存失败：${error?.message || error}`)
+  } finally {
+    button.disabled = false
+  }
 })
 
 // 工具按类别分组渲染（结构化，便于查看）。name 不在下列表里的归"其他"。

@@ -53,9 +53,10 @@ startNmReader((msg) => {
     case "hello": {
       // 扩展连上后第一条：带 sid + shell + 尺寸。据此 spawn 该 tab 的 PTY（已存在则只 resize）。
       const sid = sidOf(msg)
-      if (!ptys.has(sid)) spawnShell(sid, msg.shell, msg.cols, msg.rows)
+      let ready = true
+      if (!ptys.has(sid)) ready = spawnShell(sid, msg.shell, msg.cols, msg.rows)
       else if (msg.cols && msg.rows) ptys.get(sid).resize(msg.cols, msg.rows)
-      nmSend({ type: "status", state: "ready", sid })
+      if (ready) nmSend({ type: "status", state: "ready", sid })
       break
     }
     case "input":
@@ -71,6 +72,25 @@ startNmReader((msg) => {
       // 设置面板"查看工具"子菜单：返回 omeety 注册的全部工具（name + description）。
       nmSend({ type: "tools_list", tools: TOOLS.map((t) => ({ name: t.name, description: t.description })) })
       break
+    case "restart": {
+      // 设置页切换 shell：在同一条 native 连接上原子替换 PTY，避免 panel
+      // 断连/重连和 shutdown → hello 之间的竞态。先从 map 移除旧实例，
+      // 这样它稍后到达的 onExit 不会误删新 PTY。
+      const sid = sidOf(msg)
+      const oldPty = ptys.get(sid)
+      if (oldPty) {
+        ptys.delete(sid)
+        try {
+          oldPty.kill()
+        } catch {
+          /* ignore */
+        }
+      }
+      if (spawnShell(sid, msg.shell, msg.cols, msg.rows)) {
+        nmSend({ type: "status", state: "ready", sid })
+      }
+      break
+    }
     case "shutdown": {
       const sid = msg && msg.sid
       if (sid && ptys.has(sid)) {
@@ -127,9 +147,11 @@ function spawnShell(sid, shellChoice, cols, rows) {
     })
     ptys.set(sid, ptyApi)
     log("spawnShell OK sid=" + sid)
+    return true
   } catch (e) {
     log("spawnShell FAILED sid=" + sid, e?.stack || String(e))
     nmSend({ type: "status", state: "mcp_error", sid, msg: "shell 启动失败：" + (e?.message || e) })
+    return false
   }
 }
 
