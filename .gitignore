@@ -24,6 +24,7 @@ _pwtest/*
 !_pwtest/test_cursor_sync_rows.py
 !_pwtest/test_cursor_active_codex.py
 !_pwtest/test_ime_composition.py
+!_pwtest/test_browser_tool_reliability.py
 
 # Logs, screenshots, backups, and editor/OS state
 *.log

@@ -11,6 +11,38 @@ Microsoft 或 xterm.js 的官方产品。
 
 没有切换按钮——它就是个真实 shell（PowerShell/cmd/自定义），想跑啥敲啥（`git`、`npm`、`claude`、`codex`、`kimi`…）。浏览器工具在安装时一次性写进各 AI 的配置，所以"开箱即用"。
 
+## 产品定位：Agent 的浏览器外骨骼
+
+可以把 LLM 理解为操控者，把 Codex、Claude Code、Kimi Code 等 CLI Agent
+理解为各有特长的战甲；**Omeety 是套在这些 Agent 外面的浏览器外骨骼**：
+它不替代里面的 Agent，而是为任意“模型 + Agent”组合提供同一双浏览器眼睛、
+同一双手和一条真实终端通道。
+
+换一种说法，Omeety 是一套**兼容不同赛车和车手的浏览器赛道遥测与操作系统**。
+它不绑定 GPT、Claude、GLM、Kimi 或某一家 CLI，也不要求它们为 Omeety 做专门
+适配；支持 MCP 的 Agent 都应能复用同一套浏览器能力。
+
+这也决定了项目的开发原则：
+
+- **Agent 中立**：浏览器能力走开放协议和稳定工具契约，不把能力锁进某个模型或 CLI。
+- **保持终端纯粹**：核心仍是真 PTY + xterm.js，不在侧栏里另造聊天 Agent、文件树或完整 IDE。
+- **做强眼睛和手脚**：优先提高页面感知、元素定位、真实输入、跨导航操作、截图和上下文交接的可靠性。
+- **本地优先、权限可见**：终端拥有本机用户权限；浏览器操作在本机桥接，危险动作保留确认边界。
+- **渐进增强**：Agent 即使不认识 Omeety 的 UI，也能只凭 MCP 工具工作；高级能力应当可选，不破坏普通 shell。
+
+### 给 Clone / Fork 的二开方向
+
+推荐围绕“外骨骼”继续扩展，而不是把核心变成另一个封闭 Agent：
+
+1. 完善 PTY、键盘、IME、渲染和会话恢复，让它更接近系统终端。
+2. 增强浏览器遥测（DOM、Console、Network、截图）以及稳定、可审计的操作能力。
+3. 将选取元素、页面片段和图片组合成标准 Context Bundle，交给不同 CLI Agent。
+4. 为更多 MCP Agent、浏览器和操作系统增加薄适配层，保持核心工具契约一致。
+5. 把权限组、只读模式、域名边界等做成可选安全层，而不是绑定某个模型的策略。
+
+当前第一优先级是**可靠性**：终端输入输出和浏览器工具必须先做到“结果真实、错误
+可信、页面跳转不中断”。连续选取与 Context Bundle 是下一阶段的重点。
+
 ## 它怎么工作（一张图）
 
 ```
@@ -21,7 +53,8 @@ Microsoft 或 xterm.js 的官方产品。
                                                          工具调用 → 转发到 content.js（操控当前标签页）
 ```
 
-- host 只在**终端面板打开时**由浏览器拉起运行；关掉面板 = host 退出。
+- 首次打开终端面板时，浏览器拉起 host；之后 offscreen 保活会让 host/PTY 在侧栏关闭后继续运行。
+- 重新打开侧栏会复用原会话并回放有限的近期输出；退出浏览器、重载扩展或 host 异常退出才会结束会话。
 - 一个进程干三件事：终端 I/O 中继、PTY（真 shell）、MCP 服务。
 
 ## ⚠ 前置：必须有一个本地 host
@@ -72,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 **查看 / 获取**：`omeety_get_page_snapshot`（元素 uid 跨快照稳定）、`omeety_get_selected_context`、`omeety_capture_visible_tab`（截图，1280 宽自适应下采样）、`omeety_fetch_with_cookie`、`omeety_get_user_pick`（侧栏 📌 选取的元素）、`omeety_list_tabs`、`omeety_get_console_logs`（CDP 收 console/异常）。
 
-**操作**：`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`（等元素/文本出现，代替瞎等）、`omeety_execute_js`（页面 MAIN world 执行任意 JS 的逃生舱）、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
+**操作**：`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`（可跨 reload/导航等待元素或文本）、`omeety_execute_js`（通过 CDP 在严格 CSP 页面执行 JS 的逃生舱）、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
 
 危险操作（提交/保存/删除/同意类点击、非 GET 请求）会自动弹浏览器确认框，需你同意才执行。富文本编辑器（飞书等）合成事件不认时，给 `click_at`/`fill`/`type_text`/`press_key` 传 `cdp:true` 走真实输入。
 
@@ -84,7 +117,8 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 | `/mcp` 里没有 omeety_terminal | 重新运行 `install.ps1`（会重写 agent 配置）；Codex 可用 `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp` |
 | codex/kimi 连不上 MCP | 确认配置 URL 是 `http://127.0.0.1:49171/mcp`；检查 `~/.codex/config.toml`、`~/.kimi-code/config.toml` |
 | 终端里找不到 claude/codex/kimi | host 的 PATH 来自浏览器环境；用全路径运行，或把它们的目录加到系统 PATH 后重启浏览器 |
-| 截图/工具调用偶发失败 | 终端面板要保持打开（关了 host 就退了） |
+| 关闭侧栏后再打开，少量旧输出没显示 | 会话仍在运行，但只回放最近 64KB 输出；继续输入即可，完整历史应由终端程序自身保存 |
+| `execute_js` 后出现浏览器调试提示条 | 该工具为兼容严格 CSP 使用 CDP；这是 Chromium 对 `debugger` 权限的可见提示，不影响普通终端 |
 
 ## 卸载
 
@@ -108,7 +142,7 @@ _pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
 ## 已知限制 / 安全
 
 - **真终端 = 整机权限**：这是固有特性。host 的 MCP 只 bind `127.0.0.1`（不对外）；危险浏览器操作仍走页面内确认框。
-- 终端面板关闭 → host 退出、shell 会话结束；再开是新 shell。
+- 侧栏关闭后 offscreen document 会尽力保活 host/PTY，并只缓存最近 64KB 输出；退出浏览器、重载扩展、native host 崩溃或被系统回收仍会结束会话。
 - 仅 Windows 验证（ConPTY）；macOS/Linux 理论可行（改 `pty.js` 的 shell 选择即可）。
 - Codex 在浏览器侧栏终端中的光标/中文 IME 兼容性跟踪：
   [openai/codex#35438](https://github.com/openai/codex/issues/35438)。

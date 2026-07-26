@@ -74,7 +74,7 @@ export const TOOLS = [
   },
   {
     name: "omeety_click",
-    description: "Click an element by uid (preferred, from snapshot.interactive[].uid) or CSS selector. Dangerous labels auto-trigger a user confirm unless confirmed:true. Optional waitForSelector/waitForText: after clicking, poll every 200ms until the selector/text appears before returning — use after opening a menu or navigating, instead of guessing a sleep.",
+    description: "Click an element by uid (preferred, from snapshot.interactive[].uid) or CSS selector. Dangerous labels auto-trigger a user confirm unless confirmed:true. Optional waitForSelector/waitForText: after clicking, wait across reloads/navigation until the selector/text appears — use after opening a menu or navigating, instead of guessing a sleep. A successful navigation is not misreported as a closed message channel.",
     inputSchema: {
       type: "object",
       properties: {
@@ -229,10 +229,14 @@ export const TOOLS = [
   {
     name: "omeety_execute_js",
     description:
-      "Escape hatch: execute arbitrary JavaScript in the active page's MAIN world (can read/write page variables, call page functions, await async logic — runs as an async function body, use `return` for the value). world:'ISOLATED' runs in the content-script world instead. Use for anything the dedicated tools don't cover (read framework state, call page APIs, complex DOM extraction). The return value must be JSON-serializable (truncated at 200KB).",
+      "Escape hatch: execute arbitrary JavaScript in the active page's MAIN world through CDP Runtime.evaluate (works on strict-CSP pages that block unsafe-eval). It can read/write page variables, call page functions, and await async logic; code runs as an async function body, so use `return` for the value. world:'ISOLATED' creates an isolated execution world. Use for anything the dedicated tools don't cover. The return value is stringified and truncated at 200KB. Attaching CDP may show the browser's debugging banner. Dangerous code requires confirmed:true.",
     inputSchema: {
       type: "object",
-      properties: { code: { type: "string" }, world: { type: "string", enum: ["MAIN", "ISOLATED"], default: "MAIN" } },
+      properties: {
+        code: { type: "string" },
+        world: { type: "string", enum: ["MAIN", "ISOLATED"], default: "MAIN" },
+        confirmed: { type: "boolean", description: "Required when the code performs a dangerous action such as submit/delete/send" },
+      },
       required: ["code"],
     },
   },
@@ -248,7 +252,7 @@ export const TOOLS = [
   {
     name: "omeety_wait_for",
     description:
-      "Wait until a CSS selector matches a visible element OR a text string appears in the page (whichever condition is given), polling every 200ms up to timeoutMs (default 10000, max 60000). Call after navigate/click instead of guessing fixed sleeps.",
+      "Wait until a CSS selector matches a visible element OR a text string appears in the page, polling every 200ms up to timeoutMs (default 10000, max 60000). The wait survives reloads, cross-document navigation, and BFCache transitions. Call after navigate/click instead of guessing fixed sleeps.",
     inputSchema: {
       type: "object",
       properties: { selector: { type: "string" }, text: { type: "string" }, timeoutMs: { type: "integer", minimum: 500, maximum: 60000 } },
