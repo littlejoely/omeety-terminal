@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<title>omeety IME 诊断（真实 terminal.js + 全量捕获）</title>
+<link rel="stylesheet" href="../extension/vendor/xterm.css">
+<script src="../extension/vendor/terminal.bundle.js"></script>
+<style>
+  body{background:#111;color:#eee;font-family:"Microsoft YaHei",system-ui;margin:0;padding:18px}
+  #hint{font-size:14px;line-height:1.8;margin-bottom:14px;background:#222;padding:14px 16px;border-radius:8px;border:1px solid #444}
+  #hint b{color:#7cb342}
+  #hint .k{background:#333;padding:1px 6px;border-radius:4px;border:1px solid #555}
+  #t{width:780px;height:380px;background:#000}
+</style>
+</head><body>
+<div id="hint">
+  <b>加载的是真实 extension/terminal.js（含光标稳定器）。</b> 全量捕获每个键的 keydown / composition / input / 交付。<br>
+  1. 点黑色终端 → 切中文输入法<br>
+  2. 按 <span class="k">Shift + "</span> 一次<br>
+  3. 敲拼音 <span class="k">n i</span> 选"你"字（测拼音组合）<br>
+  4. 按 <span class="k">'</span> 一次
+</div>
+<div id="t"></div>
+<script type="module">
+  import { initTerminal } from '../extension/terminal.js';
+  const api = initTerminal({
+    hostEl: document.getElementById('t'),
+    send: (msg) => {
+      if (msg && msg.type === 'input') {
+        console.log('[omeety-ime] DELIVERED', JSON.stringify(msg.data));
+        // 模拟 codex 回显：把字符写回终端 → 触发 write → cgPinned → 光标稳定器活跃
+        // （这是真实 codex 会话与本次空跑测试的唯一区别）
+        setTimeout(() => { try { term.write(msg.data); } catch (e) { /* ignore */ } }, 8);
+      }
+    },
+    fontSize: 14,
+    onFontSizeChange: () => {},
+    onTitleChange: () => {},
+  });
+  const term = api.term;
+  term.write('就绪。请按提示操作。\r\n> ');
+  setTimeout(() => api.focus(), 100);
+
+  // 全量诊断：每个键的 keydown 签名 + composition/input 事件
+  const ta = term.element.querySelector('.xterm-helper-textarea');
+  ta.addEventListener('keydown', (e) => {
+    console.log('[omeety-ime] KEYDOWN', e.code, 'kc='+e.keyCode, 'isComp='+e.isComposing, 'key='+JSON.stringify(e.key));
+  }, true);
+  ta.addEventListener('compositionstart', () => console.log('[omeety-ime] compositionstart'));
+  ta.addEventListener('compositionupdate', (e) => console.log('[omeety-ime] compositionupdate', JSON.stringify(e.data)));
+  ta.addEventListener('compositionend', (e) => console.log('[omeety-ime] compositionend', JSON.stringify(e.data)));
+  ta.addEventListener('input', (e) => console.log('[omeety-ime] input', JSON.stringify(e.data), e.inputType, 'composed='+e.composed));
+</script>
+</body></html>

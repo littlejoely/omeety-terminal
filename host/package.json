@@ -1,0 +1,13 @@
+{
+  "name": "omeety-terminal-host",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Omeety Terminal native messaging host: PTY + browser-control MCP",
+  "main": "src/index.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^4.21.0",
+    "node-pty": "^1.1.0"
+  }
+}
