@@ -26,8 +26,10 @@ if (-not $node -or -not (Test-Path $node)) { $node = "C:\Program Files\nodejs\no
 if (-not (Test-Path $node)) { throw "找不到 node.exe。请先装 Node.js（LTS）。" }
 Write-Ok "node = $node"
 
-Write-Step "安装 host 依赖（node-pty / MCP SDK / express）"
-if (-not (Test-Path (Join-Path $HostDir "node_modules"))) {
+Write-Step "安装 host 依赖（node-pty / MCP SDK / express / undici）"
+$requiredModules = @("node-pty", "@modelcontextprotocol\sdk", "express", "undici")
+$missingModule = $requiredModules | Where-Object { -not (Test-Path (Join-Path $HostDir "node_modules\$_")) } | Select-Object -First 1
+if ($missingModule) {
   Push-Location $HostDir
   try { & $node (Join-Path (Split-Path $node) "npm.cmd") install --no-audit --no-fund 2>&1 | Out-Null }
   finally { Pop-Location }
@@ -92,3 +94,4 @@ Write-Host "  1) edge://extensions 开发者模式 → 加载已解压 → 选 $
 Write-Host "  2) 扩展 ID 应为 $ExtId（manifest key 固定）"
 Write-Host "  3) 点扩展图标开侧栏 → 终端里敲 claude / codex / kimi"
 Write-Host "  4) MCP 地址：$McpUrl"
+Write-Host "  5) Omeety 终端内可用：omeety download <URL>（开始前仍需在侧栏确认）"

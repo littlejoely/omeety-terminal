@@ -14,6 +14,9 @@ your user account.
   public images belong under `docs/images`.
 - Browser actions that submit, save, delete, or perform non-GET requests require
   explicit confirmation in the extension.
+- Local downloads require explicit side-panel confirmation, are constrained to
+  the configured Downloads directory, and are never executed by Omeety. Treat
+  downloaded executables as untrusted even when a checksum was provided.
 
 If you discover a vulnerability, avoid posting credentials or private data in a
 public issue. Open an issue containing only non-sensitive reproduction details.

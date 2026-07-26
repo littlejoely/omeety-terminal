@@ -7,6 +7,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { TOOLS } from "./tools.meta.js"
 import { relayCall } from "./relay.js"
 import { log } from "./log.js"
+import { DownloadManager } from "./download-manager.js"
 
 function safeStr(v) {
   try {
@@ -39,17 +40,25 @@ export function makeToolContent(result) {
   return [{ type: "text", text: safeStr(textResult) }, ...images]
 }
 
-function makeServer(nmSend) {
+function makeServer(nmSend, downloadManager) {
   const server = new Server({ name: "omeety-terminal", version: "1.0.0" }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
   }))
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params
-    const r = await relayCall(nmSend, name, args)
-    return r.ok
-      ? { content: makeToolContent(r.result) }
-      : { isError: true, content: [{ type: "text", text: String(r.error) }] }
+    try {
+      if (downloadManager.isDownloadTool(name)) {
+        const result = await downloadManager.handleTool(name, args || {})
+        return { content: makeToolContent(result) }
+      }
+      const r = await relayCall(nmSend, name, args)
+      return r.ok
+        ? { content: makeToolContent(r.result) }
+        : { isError: true, content: [{ type: "text", text: String(r.error) }] }
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: String(error?.message || error) }] }
+    }
   })
   return server
 }
@@ -58,13 +67,22 @@ export function startMcpHttp({ port, nmSend }) {
   const app = express()
   app.use(express.json({ limit: "10mb" }))
 
+  const downloadManager = new DownloadManager({
+    confirm: async ({ message, detail }) => {
+      // 侧栏确认自身 60 秒超时；给 native 往返留出余量，避免边界上先报 relay timeout。
+      const response = await relayCall(nmSend, "omeety_request_user_confirmation", { message, detail }, 65000)
+      return Boolean(response.ok && response.result?.approved)
+    },
+  })
+  let resumedDownloads = false
+
   const sessions = new Map() // sessionId -> { transport, server }
 
   // Stateless Streamable HTTP：URL 型 Codex MCP 配置会向同一地址 POST initialize/tools 请求。
   // 每个请求使用独立 server/transport，不需要维护 session，也不会和 legacy SSE 会话串线。
   app.post("/mcp", async (req, res) => {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const server = makeServer(nmSend)
+    const server = makeServer(nmSend, downloadManager)
     let closed = false
     const close = () => {
       if (closed) return
@@ -91,7 +109,7 @@ export function startMcpHttp({ port, nmSend }) {
 
   app.get("/sse", async (_req, res) => {
     const transport = new SSEServerTransport("/messages", res)
-    const server = makeServer(nmSend)
+    const server = makeServer(nmSend, downloadManager)
     sessions.set(transport.sessionId, { transport, server })
     log("mcp /sse new session", transport.sessionId)
     res.on("close", () => {
@@ -133,6 +151,12 @@ export function startMcpHttp({ port, nmSend }) {
     const server = app.listen(port, "127.0.0.1", () => {
       log("mcp listening", port, attempt > 0 ? "(retry#" + attempt + ")" : "")
       console.error(`[mcp] HTTP on http://127.0.0.1:${port}/mcp (legacy SSE: /sse)`)
+      // 只有真正抢到 MCP 端口的 host 才恢复任务。扩展热重载时新旧 host 会短暂并存，
+      // 若在 listen 前恢复，两边会同时写同一批分块文件。
+      if (!resumedDownloads) {
+        resumedDownloads = true
+        void downloadManager.resumeInterrupted().catch((error) => log("download resume failed", error?.stack || String(error)))
+      }
     })
     server.on("error", (e) => {
       log("mcp listen ERROR", e?.code, "attempt=" + attempt)
@@ -143,4 +167,5 @@ export function startMcpHttp({ port, nmSend }) {
     })
   }
   listenWithRetry()
+  return { downloadManager }
 }

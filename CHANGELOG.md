@@ -14,7 +14,11 @@ Browser intelligence, terminal session, and resource lifecycle / 浏览器智能
   DOM context, diagnostics, and a cropped screenshot returned as MCP image content.
 - Add `omeety_act_and_verify` for action + navigation-resilient postcondition transactions.
 - Add incremental light snapshots and `omeety_get_runtime_metrics` latency/reliability reporting.
-- Add continuous multi-element picking with stable `pick-1..N` references,
+- Three MCP-first persistent download tools (`start`, `status`, and `cancel`)
+  backed by one Native Host download core, with explicit side-panel approval,
+  direct/proxy probing, ranged concurrency, retry/resume, optional SHA-256
+  verification, atomic publishing, and a thin `omeety download` CLI wrapper.
+- Continuous multi-element picking with stable `pick-1..N` references,
   `omeety_get_user_picks`, and safe no-Enter context injection into the active
   terminal/Agent input line.
 - Add a real Edge/Native Messaging/ConPTY/WebGL performance baseline covering
