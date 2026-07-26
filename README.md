@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#已知限制--安全)
-[![MCP tools: 32](https://img.shields.io/badge/MCP_tools-32-5ee7b1?style=flat-square)](#支持的浏览器工具32-个agent-自动可用)
+[![MCP tools: 35](https://img.shields.io/badge/MCP_tools-35-5ee7b1?style=flat-square)](#mcp-工具35-个)
 
 **Omeety Terminal 是 CLI Agent 的浏览器外骨骼：把真实本地终端放进
 Edge/Chrome 侧栏，让 Codex、Claude Code、Kimi Code 以及任何支持 MCP 的
 CLI Agent 共用当前网页的同一双眼睛和手。**
 
 [3 分钟快速开始](#3-分钟快速开始) · [为什么是 Omeety](#为什么是-omeety) ·
-[工作原理](#它怎么工作一张图) · [32 个浏览器工具](#支持的浏览器工具32-个agent-自动可用) ·
+[工作原理](#它怎么工作一张图) · [35 个 MCP 工具](#mcp-工具35-个) ·
 [安全边界](#已知限制--安全) · [参与开发](CONTRIBUTING.md)
 
 ![Omeety 通过真实 MCP 路径读取并操作当前标签页](docs/images/omeety-demo.gif)
 
 > 上面的可复现演示使用确定性的本地 MCP 客户端，实际经过扩展、Native
 > Messaging、ConPTY 和浏览器工具；Codex、Claude Code、Kimi Code 使用同一套
-> 32 个工具。演示不依赖模型账号或预录的模型回答。
+> 35 个工具。演示不依赖模型账号或预录的模型回答。
 
 没有专用聊天模式，也没有模型切换按钮——它就是一个真实 shell。你仍然可以运行
 `git`、`npm`、`claude`、`codex`、`kimi` 或任意本地命令；区别是里面的 Agent
@@ -37,6 +37,7 @@ Microsoft 或 xterm.js 的官方产品。
 | Codex、Claude Code、Kimi Code 共用一套能力 | ✅ | 部分支持 | 通常绑定自家 Agent |
 | Agent / 模型中立的 MCP 工具契约 | ✅ | ✅ | 通常不是 |
 | 页面元素选取、截图、Console、真实 CDP 输入 | ✅ | 视实现而定 | 视产品而定 |
+| 持久化下载、断点续传、代理择路与 SHA-256 校验 | ✅ | 通常没有 | 视产品而定 |
 | 本地桥接；MCP 仅监听 `127.0.0.1` | ✅ | 视实现而定 | 视产品而定 |
 | 提交、删除、保存等危险操作保留确认 | ✅ | 视实现而定 | 视产品而定 |
 
@@ -110,10 +111,12 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 ```
 扩展侧栏 [ xterm.js 终端 ]  ←─ native messaging ─→  本地 host（Node，一个进程）
-                                                        ├─ PTY：真实 shell，I/O 桥到终端
-                                                        └─ MCP Streamable HTTP @ http://127.0.0.1:49171/mcp
+                                                         ├─ PTY：真实 shell，I/O 桥到终端
+                                                         ├─ 下载核心：任务状态、分块、校验、原子落盘
+                                                         └─ MCP Streamable HTTP @ http://127.0.0.1:49171/mcp
                                                                ↑ claude/codex/kimi 用各自配置连它
-                                                         工具调用 → 转发到 content.js（操控当前标签页）
+                                                         浏览器工具 → 转发到 content.js
+                                                         下载工具 → host 本地核心
 ```
 
 - 首次打开终端面板时，浏览器拉起 host；之后 offscreen 按设置保活 host/PTY（持续保活、空闲 30 分钟或立即结束）。
@@ -146,7 +149,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 ```
 
 安装器会：
-1. 给 host 装 npm 依赖（`node-pty` / MCP SDK / express）。
+1. 给 host 装 npm 依赖（`node-pty` / MCP SDK / express / undici）。
 2. 生成 `host/host-manifest.json`；Windows 注册到 HKCU，macOS 安装到浏览器用户级 `NativeMessagingHosts` 目录，均不需要管理员权限。
 3. 把 MCP（`http://127.0.0.1:49171/mcp`）写进 `claude`、`codex`、`kimi` 的配置（先备份成 `*.bak-时间戳`）。
 
@@ -162,7 +165,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 1. 点扩展图标开侧栏 → 首次有"真·终端=整机权限"的确认门，点「我了解」。
 2. 出现系统 Shell 提示符（Windows 为 PowerShell，macOS 为 zsh）。敲 `claude`（或 `codex` / `kimi`）。
 3. 在 agent 里：
-   - `/mcp`（claude）能看到 `omeety_terminal` + 32 个 `omeety_*` 工具已连上。
+   - `/mcp`（claude）能看到 `omeety_terminal` + 35 个 `omeety_*` 工具已连上。
    - 让它"描述当前网页" → 它会读取你**当前 Chrome/Edge 标签页**的内容。
 4. 设置（⚙）：可切换 Shell、调整每个 Tab 的回滚行数，并配置侧栏关闭后的会话保活策略。
 
@@ -181,13 +184,36 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 - **连续选取**：点「选取」后在网页连续点选（再次点击可取消该项），按 Enter 或点
   「完成选取」结束；`pick-1…N` 稳定引用和简洁摘要会写入当前终端输入行，且不会自动回车执行。
 
-## 支持的浏览器工具（32 个，agent 自动可用）
+## MCP 工具（35 个）
+
+其中 32 个是浏览器眼睛与双手，3 个是 MCP-first 的本地下载工具；Codex、Claude
+Code、Kimi Code 等 Agent 自动使用同一套工具契约。
+
+### 浏览器工具（32 个）
 
 **查看 / 获取**：`omeety_get_context_bundle`（结构化元素上下文 + 局部截图）、`omeety_get_page_snapshot`（稳定 uid + 增量快照）、`omeety_get_selected_context`、`omeety_capture_visible_tab`、`omeety_fetch_with_cookie`、`omeety_get_user_pick`、`omeety_get_user_picks`（连续选取的 `pick-1…N`）、`omeety_list_tabs`、`omeety_get_console_logs`、`omeety_get_runtime_metrics`。
 
 **操作**：`omeety_act_and_verify`（动作 + 后置条件验证事务）、`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`、`omeety_execute_js`、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
 
 危险操作（提交/保存/删除/同意类点击、非 GET 请求）会自动弹浏览器确认框，需你同意才执行。富文本编辑器（飞书等）合成事件不认时，给 `click_at`/`fill`/`type_text`/`press_key` 传 `cdp:true` 走真实输入。
+
+### 本地下载工具（3 个，MCP-first）
+
+- `omeety_download_start`：确认后创建持久化任务；自动探测直连/代理、按服务器能力并发分块、重试与断点续传，可选 SHA-256 校验。
+- `omeety_download_status`：不传 `taskId` 时列出全部任务，传入后返回单个任务的进度、速度、ETA、线路与校验结果。
+- `omeety_download_cancel`：取消任务并保留分块文件；下载内容永不自动执行。
+
+CLI 只是这三个 MCP 工具的薄封装，Agent 与用户看到的是同一批任务：
+
+```powershell
+omeety download <URL> [--sha256 <校验值>] [--network auto|direct|proxy]
+omeety download status [TASK_ID]
+omeety download cancel <TASK_ID>
+```
+
+开始下载前，Omeety 会在侧栏显示来源、文件名、大小、线路、保存位置和校验信息，
+必须由用户确认。任务由 Native Host 执行，关闭当前终端 tab 不会中断；退出浏览器或
+Host 后任务会记为中断，并在下次 Host 成功启动后从已有分块继续。
 
 ## 常见问题
 
@@ -197,6 +223,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 | `/mcp` 里没有 omeety_terminal | 重新运行安装器（会重写 agent 配置）；Codex 可用 `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp` |
 | codex/kimi 连不上 MCP | 确认配置 URL 是 `http://127.0.0.1:49171/mcp`；检查 `~/.codex/config.toml`、`~/.kimi-code/config.toml` |
 | 终端里找不到 claude/codex/kimi | host 的 PATH 来自浏览器环境；用全路径运行，或把它们的目录加到系统 PATH 后重启浏览器 |
+| `omeety download` 无法连接 | 先打开浏览器与 Omeety；CLI 是本机 MCP 的薄封装，Host 未运行时不会另起一套下载进程 |
 | 关闭侧栏后再打开，少量旧输出没显示 | 会话仍在运行，但只回放最近 64KB 输出；继续输入即可，完整历史应由终端程序自身保存 |
 | 多终端 Tab 占用偏高 | 在设置中把“终端回滚行数”调为 3,000 或 5,000；Omeety 只为活动 Tab 保留 WebGL Renderer |
 | `execute_js` 后出现浏览器调试提示条 | 该工具为兼容严格 CSP 使用 CDP；这是 Chromium 对 `debugger` 权限的可见提示，不影响普通终端 |
@@ -241,6 +268,7 @@ npm test
 ## 已知限制 / 安全
 
 - **真终端 = 整机权限**：这是固有特性。host 的 MCP 只 bind `127.0.0.1`（不对外）；危险浏览器操作仍走页面内确认框。
+- **下载必须确认且永不执行**：下载前在侧栏确认，文件只写入配置的 Downloads 目录；可执行文件会明确标记，Omeety 不会启动它。
 - 侧栏关闭后是否保活由设置决定，并只缓存最近 64KB 输出；退出浏览器、重载扩展、native host 崩溃或被系统回收仍会结束会话。
 - 已验证 Windows ConPTY 与 macOS Chrome + zsh PTY；Linux 尚未完成浏览器真机回归。
 - Safari 当前不受支持：Safari 没有 Chromium `sidePanel`、`offscreen`、`chrome.debugger/CDP` 的等价组合，并且其 Native Messaging 必须通过包含扩展的 macOS App。Safari 版需要独立容器 App 和浏览器适配层，不能直接加载本目录。

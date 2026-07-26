@@ -10,6 +10,7 @@ const NM_NAME = "com.omeety.terminal"
 
 let nativePort = null
 const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel"}) 连进来
+const panelConfirmations = new Map() // id -> { resolve, timer }，下载等 host 本地工具也能在侧栏确认
 let lastPick = null // 最近一个选取（兼容 omeety_get_user_pick）
 let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
 const runtimeStartedAt = Date.now()
@@ -168,7 +169,14 @@ chrome.runtime.onConnect.addListener((port) => {
   // 不在此处主动回放：面板此时还没建 tab，回放会路由不到任何终端被丢弃。
   // 面板建好 tab 后会发 replay_request（见下）。
   port.onMessage.addListener(async (m) => {
-    if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "restart" || m?.type === "shutdown" || m?.type === "list_tools" || m?.type === "list_sessions" || m?.type === "session_meta") {
+    if (m?.type === "confirmation_response") {
+      const pending = panelConfirmations.get(String(m.id || ""))
+      if (pending) {
+        clearTimeout(pending.timer)
+        panelConfirmations.delete(String(m.id || ""))
+        pending.resolve(Boolean(m.approved))
+      }
+    } else if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "restart" || m?.type === "shutdown" || m?.type === "list_tools" || m?.type === "list_sessions" || m?.type === "session_meta") {
       sendNative(m)
     } else if (m?.type === "settings_changed") {
       void notifyPanelState(panelPorts.size > 0)
@@ -200,12 +208,39 @@ chrome.runtime.onConnect.addListener((port) => {
   })
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port)
-    // 由用户设置决定永久保活、空闲 30 分钟回收，或立即结束。
-    if (panelPorts.size === 0) void notifyPanelState(false)
+    if (!panelPorts.size) {
+      for (const [id, pending] of panelConfirmations) {
+        clearTimeout(pending.timer)
+        pending.resolve(false)
+        panelConfirmations.delete(id)
+      }
+      // 由用户设置决定永久保活、空闲 30 分钟回收，或立即结束。
+      void notifyPanelState(false)
+    }
   })
   connectNative()
   void notifyPanelState(true)
 })
+
+function requestPanelConfirmation(args = {}) {
+  const port = panelPorts.values().next().value
+  if (!port) return null
+  const id = crypto.randomUUID()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      panelConfirmations.delete(id)
+      resolve(false)
+    }, 60000)
+    panelConfirmations.set(id, { resolve, timer })
+    try {
+      port.postMessage({ type: "confirmation_request", id, message: String(args.message || "请确认操作"), detail: String(args.detail || "") })
+    } catch {
+      clearTimeout(timer)
+      panelConfirmations.delete(id)
+      resolve(false)
+    }
+  })
+}
 
 // ---------- CDP（chrome.debugger）真实输入 ----------
 // 合成事件（content.js dispatchEvent）isTrusted=false，建不了真实光标/选区 → 飞书 Lark
@@ -466,7 +501,12 @@ async function handleToolCall({ id, name, args }) {
   try {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null
     let r
-    if (name === "omeety_get_context_bundle") {
+    if (name === "omeety_request_user_confirmation") {
+      // 优先让 Omeety 自己的侧栏承载确认：下载管理器属于 host 本地工具，不应依赖当前网页
+      // 是否允许 content script 注入。侧栏关闭时回退到原网页 confirm，保持旧客户端兼容。
+      const approved = await (requestPanelConfirmation(args) ?? sendToContent(tab?.id, name, args).then((value) => Boolean(value?.result?.approved)))
+      r = { ok: true, result: { approved } }
+    } else if (name === "omeety_get_context_bundle") {
       if (!tab?.id) throw new Error("没有活动标签页")
       r = await buildContextBundle(tab.id, args)
     } else if (name === "omeety_act_and_verify") {

@@ -3,6 +3,9 @@ import pty from "node-pty"
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
+import { fileURLToPath } from "node:url"
+
+const OMEETY_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "bin")
 
 const WINDOWS_SHELLS = {
   powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -30,17 +33,18 @@ function shellExists(p) {
 function augmentPath(env) {
   const home = env.USERPROFILE || env.HOME
   const candidates = [
+    OMEETY_BIN,
     home && path.join(home, ".kimi-code", "bin"),
     home && path.join(home, ".local", "bin"),
     home && path.join(home, ".cargo", "bin"),
     env.APPDATA && path.join(env.APPDATA, "npm"),
     env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "OpenAI", "Codex", "bin"),
+    path.dirname(process.execPath),
     process.platform === "darwin" && "/opt/homebrew/bin",
     process.platform === "darwin" && "/opt/homebrew/sbin",
     process.platform !== "win32" && "/usr/local/bin",
     process.platform !== "win32" && "/usr/bin",
     process.platform !== "win32" && "/bin",
-    process.platform !== "win32" && path.dirname(process.execPath),
   ].filter(Boolean)
   const exists = candidates.filter((d) => {
     try {

@@ -29,7 +29,7 @@ ok "node = ${node_bin} ($(${node_bin} --version))"
 
 step "安装 host 依赖"
 (cd "${host_dir}" && "${npm_bin}" install --no-audit --no-fund)
-ok "node-pty / MCP SDK / Express 已就绪"
+ok "node-pty / MCP SDK / Express / undici 已就绪"
 
 step "生成 Native Messaging 启动脚本"
 {
@@ -37,6 +37,7 @@ step "生成 Native Messaging 启动脚本"
   printf 'exec %q %q\n' "${node_bin}" "${bootstrap}"
 } > "${run_host}"
 chmod 755 "${run_host}"
+chmod 755 "${host_dir}/bin/omeety.js"
 ok "${run_host}"
 
 step "生成 Native Messaging manifest"
@@ -80,3 +81,4 @@ print "  1) 打开 chrome://extensions 并启用开发者模式"
 print "  2) 加载已解压的扩展：${project_root}/extension"
 print "  3) 确认扩展 ID：${extension_id}"
 print "  4) 点击扩展图标打开侧栏，默认使用系统 zsh"
+print "  5) Omeety 终端内可用：omeety download <URL>（开始前仍需在侧栏确认）"

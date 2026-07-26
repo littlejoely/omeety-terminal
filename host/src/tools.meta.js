@@ -334,4 +334,31 @@ export const TOOLS = [
       properties: { uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" } },
     },
   },
+  {
+    name: "omeety_download_start",
+    description:
+      "Start a persistent local download after explicit user confirmation in the Omeety sidebar. In auto mode Omeety probes direct and proxy routes, chooses the faster working route, resumes partial files, retries transient failures, uses ranged concurrency when supported, verifies optional SHA-256, and atomically publishes the completed file. It never executes downloaded files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "HTTP(S) download URL" },
+        fileName: { type: "string", description: "Optional safe output filename (saved under the configured Downloads directory)" },
+        sha256: { type: "string", pattern: "^[A-Fa-f0-9]{64}$", description: "Optional expected SHA-256 checksum" },
+        networkMode: { type: "string", enum: ["auto", "direct", "proxy"], default: "auto" },
+        proxyUrl: { type: "string", description: "Optional HTTP(S) proxy URL without embedded credentials" },
+        concurrency: { type: "integer", minimum: 1, maximum: 8, default: 4 },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "omeety_download_status",
+    description: "Get one persistent download task by taskId, or list all tasks when taskId is omitted. Returns progress, speed, ETA, route, verification and errors.",
+    inputSchema: { type: "object", properties: { taskId: { type: "string" } } },
+  },
+  {
+    name: "omeety_download_cancel",
+    description: "Cancel a running download. Partial segment files are retained so the task can be inspected and future resume support can reuse them.",
+    inputSchema: { type: "object", properties: { taskId: { type: "string" } }, required: ["taskId"] },
+  },
 ]

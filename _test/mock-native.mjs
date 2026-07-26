@@ -1,8 +1,10 @@
 // Mock native messaging + MCP SSE：冒烟测试 host（无需浏览器）。
-// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(32) ④ tools/call 中继往返。
+// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(35) ④ tools/call 中继与 host 本地工具。
 // 端口用随机高位端口（OMEETY_MCP_PORT 传给 host），避免和正在运行的真实 host 抢 49171。
 import { spawn } from "node:child_process"
 import { once } from "node:events"
+import { rm } from "node:fs/promises"
+import os from "node:os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
@@ -11,6 +13,7 @@ import { StreamableHTTPClientTransport } from "../host/node_modules/@modelcontex
 
 const PORT = 49200 + (process.pid % 300)
 const HOST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "host")
+const DOWNLOAD_TEST_ROOT = join(os.tmpdir(), `omeety-mock-download-${process.pid}`)
 const child = spawn(process.execPath, ["src/index.js"], {
   cwd: HOST_DIR,
   stdio: ["pipe", "pipe", "inherit"],
@@ -18,6 +21,8 @@ const child = spawn(process.execPath, ["src/index.js"], {
   env: {
     ...process.env,
     OMEETY_MCP_PORT: String(PORT),
+    OMEETY_DOWNLOAD_STATE_DIR: join(DOWNLOAD_TEST_ROOT, "state"),
+    OMEETY_DOWNLOAD_DIR: join(DOWNLOAD_TEST_ROOT, "downloads"),
     NO_COLOR: "1",
     LC_ALL: "C",
     TERM_PROGRAM: "parent-terminal",
@@ -182,9 +187,11 @@ try {
   const httpTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`))
   await httpClient.connect(httpTransport)
   const httpList = await httpClient.listTools()
-  ok(httpList?.tools?.length === 32, `Streamable HTTP tools/list = 32 (实际 ${httpList?.tools?.length})`)
+  ok(httpList?.tools?.length === 35, `Streamable HTTP tools/list = 35 (实际 ${httpList?.tools?.length})`)
   const httpCall = await httpClient.callTool({ name: "omeety_get_page_snapshot", arguments: {} })
   ok(httpCall?.content?.[0]?.text?.includes("mocked"), "Streamable HTTP tools/call 中继往返")
+  const downloadStatus = await httpClient.callTool({ name: "omeety_download_status", arguments: {} })
+  ok(downloadStatus?.content?.[0]?.text?.includes('\"count\":0'), "Streamable HTTP host 本地下载工具")
   await httpClient.close()
 
   const sseRes = await fetch(`http://127.0.0.1:${PORT}/sse`)
@@ -197,11 +204,12 @@ try {
   await post({ jsonrpc: "2.0", id: 1, method: "tools/list" })
   await sleep(800)
   const list = sseMessages.find((m) => m.id === 1)
-  ok(list?.result?.tools?.length === 32, `MCP tools/list = 32 (实际 ${list?.result?.tools?.length})`)
+  ok(list?.result?.tools?.length === 35, `MCP tools/list = 35 (实际 ${list?.result?.tools?.length})`)
   ok(list?.result?.tools?.some((t) => t.name === "omeety_capture_visible_tab"), "工具含 omeety_capture_visible_tab")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_execute_js"), "工具含 omeety_execute_js（新增）")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_wait_for"), "工具含 omeety_wait_for（新增）")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_get_user_picks"), "工具含 omeety_get_user_picks（连续选取）")
+  ok(list?.result?.tools?.some((t) => t.name === "omeety_download_start"), "工具含 omeety_download_start（持久化下载）")
 
   await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "omeety_get_page_snapshot", arguments: {} } })
   await sleep(1500)
@@ -221,5 +229,6 @@ try {
   clearTimeout(testTimeout)
   if (forceExitTimer) clearTimeout(forceExitTimer)
   await stopChild()
+  await rm(DOWNLOAD_TEST_ROOT, { recursive: true, force: true })
   process.exit(fail || timedOut ? 1 : 0)
 }

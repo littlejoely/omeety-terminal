@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
-[![MCP tools: 32](https://img.shields.io/badge/MCP_tools-32-5ee7b1?style=flat-square)](#browser-tools-32)
+[![MCP tools: 35](https://img.shields.io/badge/MCP_tools-35-5ee7b1?style=flat-square)](#mcp-tools-35)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
 terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
 and any MCP-capable CLI the same eyes and hands for your active web page.**
 
 [3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
-[How it works](#how-it-works) · [32 browser tools](#browser-tools-32) ·
+[How it works](#how-it-works) · [35 MCP tools](#mcp-tools-35) ·
 [Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
 ![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
 
 > This reproducible demo uses a deterministic local MCP client and the real
 > extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
-> and Kimi Code use the same 32 tools. No model account or prerecorded model
+> and Kimi Code use the same 35 tools. No model account or prerecorded model
 > response is involved.
 
 There is no dedicated chat mode or model switch. Omeety remains a real shell:
@@ -39,6 +39,7 @@ of OpenAI, Anthropic, Moonshot AI, Microsoft, or xterm.js.
 | One browser layer for Codex, Claude Code, and Kimi Code | ✅ | Partial | Usually vendor-bound |
 | Agent- and model-neutral MCP contract | ✅ | ✅ | Usually no |
 | Element picker, screenshots, Console, and trusted CDP input | ✅ | Varies | Varies |
+| Persistent downloads, resume, route selection, and SHA-256 verification | ✅ | Usually no | Varies |
 | Local bridge; MCP binds only to `127.0.0.1` | ✅ | Varies | Varies |
 | Confirmation boundary for submit/delete/save actions | ✅ | Varies | Varies |
 
@@ -131,11 +132,14 @@ fallbacks and finer network telemetry are next.
 ```text
 Side-panel extension [ xterm.js terminal ]  <- Native Messaging ->  local Node host
                                                                   |- PTY: real shell I/O
+                                                                  |- download core: tasks, ranges,
+                                                                  |  verification, atomic publish
                                                                   `- MCP Streamable HTTP
                                                                      http://127.0.0.1:49171/mcp
                                                                             ^
                                                        claude / codex / kimi connect here
-                                                       tool calls -> content.js -> active tab
+                                                       browser tools -> content.js -> active tab
+                                                       download tools -> local host core
 ```
 
 - The browser starts the host when the terminal panel first opens. An offscreen
@@ -176,7 +180,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 The installer:
 
-1. Installs host dependencies (`node-pty`, the MCP SDK, and Express).
+1. Installs host dependencies (`node-pty`, the MCP SDK, Express, and undici).
 2. Generates `host/host-manifest.json`. Windows registers it under HKCU;
    macOS installs it in each detected browser's user-level
    `NativeMessagingHosts` directory. Neither path needs administrator access.
@@ -201,7 +205,7 @@ Then load the extension:
    that a real terminal has full local user permissions.
 2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
    `claude`, `codex`, or `kimi`.
-3. Inside an agent, verify that `omeety_terminal` and its 32 `omeety_*` tools
+3. Inside an agent, verify that `omeety_terminal` and its 35 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
 4. Use Settings to select a shell, configure per-tab scrollback, and choose the
    session policy used after the side panel closes.
@@ -231,7 +235,13 @@ Then load the extension:
   again to remove it), then press Enter or Finish picking. Stable `pick-1..N`
   references and a compact summary are inserted without an Enter keystroke.
 
-## Browser tools (32)
+## MCP tools (35)
+
+Thirty-two tools provide browser eyes and hands. Three MCP-first tools extend
+that reach into reliable local file transfer. Codex, Claude Code, Kimi Code,
+and other MCP agents use the same contract.
+
+### Browser tools (32)
 
 **Inspect and retrieve:** `omeety_get_context_bundle` (structured element
 context plus cropped image), `omeety_get_page_snapshot` (stable UIDs and
@@ -255,6 +265,31 @@ in-page confirmation. For rich-text editors that ignore synthetic events, set
 `cdp: true` on `click_at`, `fill`, `type_text`, or `press_key` to use trusted
 browser input.
 
+### Local download tools (3, MCP-first)
+
+- `omeety_download_start` creates a persistent task after confirmation. It can
+  probe direct and proxy routes, use concurrent byte ranges when supported,
+  retry and resume partial segments, and verify an optional SHA-256 digest.
+- `omeety_download_status` lists all tasks when `taskId` is omitted, or returns
+  one task with progress, speed, ETA, route, and verification state.
+- `omeety_download_cancel` cancels a task and retains partial segments. Omeety
+  never executes downloaded content.
+
+The CLI is only a thin wrapper around those MCP tools, so users and agents see
+the same task set:
+
+```text
+omeety download <URL> [--sha256 <digest>] [--network auto|direct|proxy]
+omeety download status [TASK_ID]
+omeety download cancel <TASK_ID>
+```
+
+Before a task starts, the side panel displays its source, filename, size,
+route, destination, and checksum information and requires explicit approval.
+The Native Host owns the task, so closing the current terminal tab does not
+interrupt it. If the browser or Host exits, unfinished tasks are marked as
+interrupted and resume from their existing segments after the Host starts again.
+
 ## Troubleshooting
 
 | Symptom | Resolution |
@@ -263,6 +298,7 @@ browser input.
 | `omeety_terminal` is missing from `/mcp` | Run the installer again. For Codex, you can also run `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp`. |
 | Codex or Kimi cannot connect to MCP | Confirm the URL is `http://127.0.0.1:49171/mcp` and inspect `~/.codex/config.toml` or `~/.kimi-code/config.toml`. |
 | The shell cannot find Claude, Codex, or Kimi | The host inherits PATH from the browser. Add the CLI directory to the system PATH and restart the browser, or use the full executable path. |
+| `omeety download` cannot connect | Open the browser and Omeety first. The CLI wraps the local MCP endpoint and does not start a separate downloader when the Host is offline. |
 | A small amount of old output is missing after reopening the panel | The session is still running, but Omeety only replays the most recent 64 KB. Continue typing; applications should persist any complete history they require. |
 | Multiple terminal tabs use too much memory | Reduce Terminal scrollback to 3,000 or 5,000 in Settings. Only the active tab retains a WebGL renderer. |
 | A browser debugging banner appears after `execute_js` | The tool uses CDP to work on strict-CSP pages. This is Chromium's visible notice for the `debugger` permission and does not affect ordinary terminal use. |
@@ -312,10 +348,13 @@ does not need a persistent `launchctl` job. Host diagnostics rotate at
 
 - **A real terminal has full local user permissions.** The MCP server binds only
   to `127.0.0.1`; dangerous browser actions still require in-page confirmation.
+- **Downloads require confirmation and are never executed.** Files are written
+  only under the configured Downloads directory; executable formats are
+  explicitly flagged and Omeety never launches them.
 - The configured side-panel policy controls whether the offscreen document keeps
-  the host and PTYs alive; only the most recent 64 KB of output is buffered.
-  Exiting the browser, reloading the extension, a Native Messaging host crash,
-  or OS reclamation still ends the sessions.
+  the host and PTYs alive; only the most recent 64 KB of output is buffered. Exiting the
+  browser, reloading the extension, a Native Messaging host crash, or OS
+  reclamation still ends the sessions.
 - Windows ConPTY and macOS Chrome with a zsh PTY have been verified. Linux has
   not yet completed a headed-browser regression pass.
 - Safari is not currently supported. It lacks the Chromium combination of

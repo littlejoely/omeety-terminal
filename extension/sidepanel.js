@@ -320,6 +320,10 @@ function connectPanel() {
   panelPort.onMessage.addListener((msg) => {
     if (msg?.type === "sessions_list") {
       restoreSessions(msg.sessions)
+    } else if (msg?.type === "confirmation_request") {
+      const detail = String(msg.detail || "")
+      const approved = window.confirm(`${msg.message || "请确认操作"}${detail ? `\n\n${detail}` : ""}`)
+      send({ type: "confirmation_response", id: msg.id, approved })
     } else if (msg?.type === "output") {
       // 按 sid 路由到对应 tab 的终端（host 给每条 output 都打了 sid）
       tabs.get(msg.sid || "default")?.term?.write(msg.data)
@@ -523,6 +527,7 @@ const TOOL_CATEGORIES = [
   { title: "预览修改（可回滚）", names: ["omeety_apply_preview_patch", "omeety_rollback_preview_patch"] },
   { title: "标签页 / 导航", names: ["omeety_list_tabs", "omeety_close_tab", "omeety_open_tab", "omeety_switch_tab", "omeety_navigate", "omeety_reload", "omeety_go_back"] },
   { title: "高级（任意 JS / 文件上传）", names: ["omeety_execute_js", "omeety_upload_file"] },
+  { title: "本地下载", names: ["omeety_download_start", "omeety_download_status", "omeety_download_cancel"] },
   { title: "交互", names: ["omeety_request_user_confirmation"] },
 ]
 function renderToolItem(t, idx) {

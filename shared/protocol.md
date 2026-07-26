@@ -30,6 +30,7 @@
 
 ```
 agent → MCP POST /messages(tools/call)
+  若为 omeety_download_*：host 直接调用同进程下载核心（start 仍经下述通道请求侧栏确认）
   host: relayCall 生成 localId，登记 Promise，stdout 发 {type:"tool_call",id,name,args}
   扩展 background: 路由到活动标签页 content.js（截图在本 SW，含下采样）
   扩展: stdin 发 {type:"tool_result",id,ok,result|error}
@@ -48,12 +49,12 @@ host 侧拆成标准 MCP `image` content，并在 JSON 中保留占位标记，�
 
 ## host 内部三件套
 
-同一 Node 进程：① nm-stdio（与扩展）② PTY（node-pty + ConPTY/Unix PTY，真实 shell）③ MCP Streamable HTTP（`127.0.0.1:49171/mcp`，兼容旧 `/sse` + `/messages`）。host 由浏览器在 `connectNative` 时拉起；侧栏关闭后是否继续运行由保活策略决定。
+同一 Node 进程：① nm-stdio（与扩展）② PTY（node-pty + ConPTY/Unix PTY，真实 shell）③ 持久化下载核心 ④ MCP Streamable HTTP（express，`127.0.0.1:49171/mcp`，兼容 `/sse` + `/messages`）。host 由浏览器在 `connectNative` 时拉起；侧栏关闭后是否继续运行由保活策略决定，退出浏览器或 host 被系统回收后离线。
 
 ## 命名
 
 - native host：`com.omeety.terminal`
 - 扩展 ID（manifest key 固定）：`fjhjkmpldbepgcpfkhpolnnheccjaamg`
 - MCP server 名 / 各 agent 配置里的 id：`omeety_terminal`
-- 工具前缀：`omeety_*`（32 个）
-- MCP 端口：`49171`（Streamable HTTP：`http://127.0.0.1:49171/mcp`）
+- 工具前缀：`omeety_*`（35 个：32 个浏览器工具 + 3 个本地下载工具）
+- MCP 端口：`49171`（主 URL：`http://127.0.0.1:49171/mcp`；兼容 SSE：`http://127.0.0.1:49171/sse`）
