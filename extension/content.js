@@ -423,18 +423,11 @@ async function clickElement(args) {
     if (!approved) throw new Error("User rejected dangerous click")
   }
   element.scrollIntoView({ block: "center", inline: "center" })
-  element.click()
-  // 可选自动等待：点开菜单/切页后，等目标 selector 或 text 出现再返回，省得调用方瞎猜 sleep。
-  // 复用 waitFor（200ms 轮询）；命中返回 {found,waitedMs}，超时返回 {found:false,timeout:true}——不抛错，交调用方裁决。
-  if (args.waitForSelector || args.waitForText) {
-    const waited = await waitFor({
-      selector: args.waitForSelector || null,
-      text: args.waitForText || null,
-      timeoutMs: clamp(Number(args.waitForTimeoutMs ?? 5000), 500, 60000),
-    })
-    return { clicked: true, element: describeElement(element), waited }
-  }
-  return { clicked: true, element: describeElement(element) }
+  const description = describeElement(element)
+  // 先让 runtime message 把结果送回 background，再在下一个 task 触发点击。若点击同步导航，旧
+  // document 的 content script 此时即使被销毁，也不会把已成功的点击误报成 channel closed。
+  setTimeout(() => element.click(), 0)
+  return { clicked: true, element: description }
 }
 
 // 按可见文本点击元素：穿透 shadow DOM 找"自身直接文本"匹配的可见元素并点击。对飞书会话列表项这类
@@ -498,8 +491,9 @@ function clickByText(args) {
     if (!approved) throw new Error("User rejected dangerous text click")
   }
   target.scrollIntoView({ block: "center", inline: "center" })
-  target.click()
-  return { clicked: true, text, matchedBy: mode, matchCount: matches.length, element: describeElement(target) }
+  const description = describeElement(target)
+  setTimeout(() => target.click(), 0)
+  return { clicked: true, text, matchedBy: mode, matchCount: matches.length, element: description }
 }
 
 function clickAt(args) {
@@ -512,13 +506,16 @@ function clickAt(args) {
     const approved = window.confirm(`Agent wants to click "${String(label).trim()}". Continue?`)
     if (!approved) throw new Error("User rejected dangerous coordinate click")
   }
-  focusElement(element)
-  dispatchPointerMouseSequence(element, x, y)
+  const description = describeElement(element)
+  setTimeout(() => {
+    focusElement(element)
+    dispatchPointerMouseSequence(element, x, y)
+  }, 0)
   return {
     clicked: true,
     x,
     y,
-    element: describeElement(element),
+    element: description,
   }
 }
 
@@ -647,6 +644,8 @@ async function waitFor(args) {
         element: hit.el ? describeElement(hit.el) : null,
       }
     }
+    // background 的跨导航等待每次只做立即探测，避免把长 Promise 留在即将销毁的旧文档中。
+    if (args.probeOnly) return { found: false, waitedMs: Date.now() - started }
     if (Date.now() - started >= timeoutMs) {
       return { found: false, timeout: true, waitedMs: Date.now() - started }
     }

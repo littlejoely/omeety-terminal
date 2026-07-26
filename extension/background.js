@@ -2,6 +2,8 @@
 // 职责：① 持有 native messaging 端口；② 把 native 的 tool_call 路由到活动标签页 content.js（截图在本 SW）；
 //       ③ 在面板与 native 间转发 input/output/resize/status。
 
+import { buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
+
 const NM_NAME = "com.omeety.terminal"
 
 let nativePort = null
@@ -462,6 +464,29 @@ async function handleToolCall({ id, name, args }) {
       // 所有 CDP 工具统一走 per-tab 串行队列 + execCdpTool（dangerous 门 / 自动聚焦 / 真实输入）。
       if (!tab?.id) throw new Error("没有活动标签页")
       r = await runSerial(tab.id, () => execCdpTool(tab.id, name, args))
+    } else if (name === "omeety_wait_for") {
+      // wait_for 在 background 逐次探测。页面发生 reload/navigation 时旧 content script
+      // 可以安全销毁；新文档注入完成后继续等，不再把 message channel closed 当作工具失败。
+      r = await waitForAcrossNavigation(tab?.id, args)
+    } else if (name === "omeety_click" && (args?.waitForSelector || args?.waitForText)) {
+      // 点击与等待拆成两个阶段。等待若跨文档，仍由上面的导航恢复轮询接管。
+      const clickArgs = { ...args }
+      delete clickArgs.waitForSelector
+      delete clickArgs.waitForText
+      delete clickArgs.waitForTimeoutMs
+      const clicked = await sendToContent(tab?.id, name, clickArgs)
+      if (!clicked.ok) {
+        r = clicked
+      } else {
+        const waited = await waitForAcrossNavigation(tab?.id, {
+          selector: args.waitForSelector,
+          text: args.waitForText,
+          timeoutMs: args.waitForTimeoutMs ?? 5000,
+        })
+        r = waited.ok
+          ? { ok: true, result: { ...clicked.result, waited: waited.result } }
+          : waited
+      }
     } else {
       r = await sendToContent(tab?.id, name, args)
     }
@@ -478,40 +503,50 @@ async function handleToolCall({ id, name, args }) {
   }
 }
 
-// 在活动页 MAIN world 执行任意 JS（可读写页面变量、调页面函数、 await 异步逻辑），是专用工具之外的
-// 万能逃生舱。返回值须可 JSON 序列化（页面侧已转成字符串，超长截 200KB）。world:"ISOLATED" 只看 DOM 时用。
+// 在活动页执行任意 JS（可读写页面变量、调页面函数、await 异步逻辑），是专用工具之外的
+// 万能逃生舱。通过 CDP Runtime.evaluate 直接解析源码，不使用 eval/new Function，因此严格 CSP
+// 页面也可运行。返回值在页面侧转成字符串，超长截 200KB。
 async function executeJsInTab(tabId, args = {}) {
   const code = String(args.code ?? args.expression ?? "")
   if (!code.trim()) return { ok: false, error: "execute_js 需要 code" }
   const world = String(args.world || "MAIN").toUpperCase() === "ISOLATED" ? "ISOLATED" : "MAIN"
-  let results
   try {
-    results = await chrome.scripting.executeScript({
-      target: { tabId },
-      world,
-      func: async (src) => {
-        try {
-          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
-          const value = await new AsyncFunction(src)()
-          let text
-          try {
-            text = typeof value === "string" ? value : JSON.stringify(value)
-          } catch {
-            text = String(value)
-          }
-          return { ok: true, value: text === undefined ? String(value) : text.slice(0, 200000) }
-        } catch (e) {
-          return { ok: false, error: String((e && e.stack) || e) }
-        }
-      },
-      args: [code],
+    await ensureCdpAttached(tabId)
+    let contextId
+    if (world === "ISOLATED") {
+      const tree = await chromeDebuggerSendCommand({ tabId }, "Page.getFrameTree", {})
+      const frameId = tree?.frameTree?.frame?.id
+      if (!frameId) throw new Error("execute_js 无法确定页面主 frame")
+      const isolated = await chromeDebuggerSendCommand({ tabId }, "Page.createIsolatedWorld", {
+        frameId,
+        worldName: "omeety_terminal_execute_js",
+        grantUniveralAccess: false,
+      })
+      contextId = isolated?.executionContextId
+      if (!contextId) throw new Error("execute_js 无法创建 isolated world")
+    }
+    const response = await chromeDebuggerSendCommand({ tabId }, "Runtime.evaluate", {
+      expression: buildPageEvaluationExpression(code),
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+      ...(contextId ? { contextId } : {}),
     })
+    if (response?.exceptionDetails) {
+      const detail = response.exceptionDetails
+      const error = detail.exception?.description || detail.text || "execute_js 解析/执行失败"
+      return { ok: false, error }
+    }
+    const value = response?.result?.value
+    if (!value || typeof value !== "object") {
+      return { ok: false, error: "execute_js 无返回（受限页面如 chrome:// 无法执行）" }
+    }
+    return value.ok
+      ? { ok: true, result: { value: value.value, world, transport: "cdp:Runtime.evaluate" } }
+      : { ok: false, error: value.error || "execute_js 执行失败" }
   } catch (e) {
     return { ok: false, error: e?.message || String(e) }
   }
-  const r = results?.[0]?.result
-  if (!r) return { ok: false, error: "execute_js 无返回（受限页面如 chrome:// 无法注入）" }
-  return r.ok ? { ok: true, result: { value: r.value, world } } : { ok: false, error: r.error }
 }
 
 // console 日志环形缓冲（per tab）：CDP attach 后收 Runtime.consoleAPICalled / Runtime.exceptionThrown /
@@ -641,8 +676,12 @@ async function sendToContent(tabId, name, args) {
       } catch {
         /* ignore */
       }
-      const r = await chrome.tabs.sendMessage(tabId, payload)
-      return normalizeContent(r)
+      try {
+        const r = await chrome.tabs.sendMessage(tabId, payload)
+        return normalizeContent(r)
+      } catch (retryError) {
+        return { ok: false, error: retryError?.message || String(retryError) }
+      }
     }
     return { ok: false, error: e?.message || String(e) }
   }
@@ -659,12 +698,52 @@ function normalizeContent(r) {
 }
 
 function isMissingContent(e) {
-  const m = String(e?.message || "")
-  return (
-    m.includes("Could not establish connection") ||
-    m.includes("Receiving end does not exist") ||
-    m.includes("message port closed")
-  )
+  return isTransientContentErrorMessage(e?.message || e)
+}
+
+const waitDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// 每次只向当前文档发一个立即探测，轮询状态留在 service worker。这样旧页面进入
+// BFCache、reload 或跨站导航时，message channel 中断只是可恢复的中间态。
+async function waitForAcrossNavigation(tabId, args = {}) {
+  if (!tabId) return { ok: false, error: "没有活动标签页" }
+  const selector = args.selector ? String(args.selector) : null
+  const text = args.text ? String(args.text) : null
+  if (!selector && !text) return { ok: false, error: "wait_for 需要 selector 或 text" }
+  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10000), 500), 60000)
+  const started = Date.now()
+  let transientError = ""
+  for (;;) {
+    const probe = await sendToContent(tabId, "omeety_wait_for", { selector, text, probeOnly: true })
+    if (probe.ok && probe.result?.found) {
+      return {
+        ok: true,
+        result: {
+          ...probe.result,
+          waitedMs: Date.now() - started,
+          navigationResilient: true,
+        },
+      }
+    }
+    if (!probe.ok) {
+      if (!isTransientContentErrorMessage(probe.error)) return probe
+      transientError = probe.error || transientError
+    }
+    const elapsed = Date.now() - started
+    if (elapsed >= timeoutMs) {
+      return {
+        ok: true,
+        result: {
+          found: false,
+          timeout: true,
+          waitedMs: elapsed,
+          navigationResilient: true,
+          lastTransientError: transientError || undefined,
+        },
+      }
+    }
+    await waitDelay(Math.min(200, timeoutMs - elapsed))
+  }
 }
 
 // ---------- 截图 + 下采样（SW 用 OffscreenCanvas，单消息 <1MB）----------
