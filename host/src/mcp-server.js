@@ -16,6 +16,29 @@ function safeStr(v) {
   }
 }
 
+export function makeToolContent(result) {
+  const images = []
+  const visit = (value) => {
+    if (Array.isArray(value)) return value.map(visit)
+    if (!value || typeof value !== "object") return value
+    const copy = {}
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "dataUrl" && typeof child === "string") {
+        const match = child.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i)
+        if (match) {
+          images.push({ type: "image", mimeType: match[1], data: match[2] })
+          copy[key] = `[returned as MCP image content #${images.length}]`
+          continue
+        }
+      }
+      copy[key] = visit(child)
+    }
+    return copy
+  }
+  const textResult = visit(result)
+  return [{ type: "text", text: safeStr(textResult) }, ...images]
+}
+
 function makeServer(nmSend) {
   const server = new Server({ name: "omeety-terminal", version: "1.0.0" }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -25,7 +48,7 @@ function makeServer(nmSend) {
     const { name, arguments: args } = req.params
     const r = await relayCall(nmSend, name, args)
     return r.ok
-      ? { content: [{ type: "text", text: safeStr(r.result) }] }
+      ? { content: makeToolContent(r.result) }
       : { isError: true, content: [{ type: "text", text: String(r.error) }] }
   })
   return server

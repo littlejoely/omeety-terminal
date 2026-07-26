@@ -12,6 +12,7 @@ const DANGEROUS_RE = /(提交|保存|删除|作废|下架|审核|确认|同意|�
 // browserSessionId 仅作 snapshot 字段兼容保留，自包含模式下不再使用。
 const patchStore = new Map()
 let browserSessionId = null
+let lastPageSnapshot = null
 
 // 自包含模式只处理工具执行请求；不再有 Codeg bootstrap / xyy_* 混淆 shim / 注册逻辑。
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -123,6 +124,10 @@ async function executeTool(tool, args) {
       return getPageSnapshot(args)
     case "omeety_get_selected_context":
       return getSelectedContext()
+    case "omeety_get_context_bundle":
+      return getContextBundle(args)
+    case "omeety_get_verification_state":
+      return getVerificationState(args)
     case "omeety_fetch_with_cookie":
       return fetchWithCookie(args)
     case "omeety_apply_preview_patch":
@@ -157,6 +162,7 @@ async function executeTool(tool, args) {
 }
 
 async function getPageSnapshot(args = {}) {
+  const started = performance.now()
   const mode = args.mode === "detailed" ? "detailed" : "light"
   const includeElements = args.includeElements === undefined ? mode === "detailed" : Boolean(args.includeElements)
   const defaultTextLength = includeElements ? 12000 : 4000
@@ -171,6 +177,7 @@ async function getPageSnapshot(args = {}) {
     selection: String(getSelection()?.toString() || "").trim().slice(0, 4000),
     visibleText: collectVisibleText(maxTextLength),
     overview: getPageOverview(),
+    topology: inspectDocumentTopology(),
     // 坐标空间元数据：snapshot.interactive[].bbox 与 omeety_click_at 都是 CSS 像素，
     // 但 omeety_capture_visible_tab 返回物理像素（= CSS × devicePixelRatio）。agent 从截图读坐标
     // 点击时必须除以 devicePixelRatio 换算，否则 dpr≠1（如 1.5）时必偏移。
@@ -184,20 +191,20 @@ async function getPageSnapshot(args = {}) {
     capturedAt: new Date().toISOString(),
   }
   if (includeElements) {
-    snapshot.forms = [...document.forms].slice(0, 20).map(describeForm)
-    snapshot.buttons = [...document.querySelectorAll("button,input[type=button],input[type=submit],a")]
+    snapshot.forms = queryAllDeep("form").slice(0, 20).map(describeForm)
+    snapshot.buttons = queryAllDeep("button,input[type=button],input[type=submit],a")
       .filter(isVisible)
       .slice(0, 100)
       .map(describeClickable)
-    snapshot.inputs = [...document.querySelectorAll("input,textarea,select,[contenteditable=true]")]
+    snapshot.inputs = queryAllDeep("input,textarea,select,[contenteditable=true]")
       .filter(isVisible)
       .slice(0, 120)
       .map(describeInput)
-    snapshot.links = [...document.querySelectorAll("a[href]")]
+    snapshot.links = queryAllDeep("a[href]")
       .filter(isVisible)
       .slice(0, 80)
       .map(describeClickable)
-    snapshot.tables = [...document.querySelectorAll("table")]
+    snapshot.tables = queryAllDeep("table")
       .filter(isVisible)
       .slice(0, 20)
       .map(describeTable)
@@ -205,7 +212,113 @@ async function getPageSnapshot(args = {}) {
   // 可交互元素 + 稳定 uid（每次快照重新打标）。agent 拿 uid 去调 click/fill/type，比猜动态 selector 稳。
   // 默认 120 与 tools.meta.js 的 maxInteractive default 对齐（之前这里写 60 导致大列表被砍）。
   snapshot.interactive = listInteractive(Number(args.maxInteractive) || 120)
-  return snapshot
+  return finalizePageSnapshot(snapshot, args, started)
+}
+
+function finalizePageSnapshot(snapshot, args, started) {
+  const digestSource = JSON.stringify({ ...snapshot, capturedAt: undefined })
+  snapshot.snapshotId = `snap-${fnv1a(digestSource)}`
+  snapshot.metrics = {
+    buildMs: Math.round((performance.now() - started) * 10) / 10,
+    visibleTextChars: snapshot.visibleText.length,
+    interactiveCount: snapshot.interactive.length,
+    estimatedBytes: 0,
+  }
+  snapshot.metrics.estimatedBytes = JSON.stringify(snapshot).length
+
+  const previous = lastPageSnapshot
+  lastPageSnapshot = snapshot
+  const since = args.sinceSnapshotId ? String(args.sinceSnapshotId) : ""
+  if (!since) return snapshot
+  if (since === snapshot.snapshotId) {
+    return {
+      snapshotId: snapshot.snapshotId,
+      baseSnapshotId: since,
+      unchanged: true,
+      incremental: true,
+      url: snapshot.url,
+      title: snapshot.title,
+      capturedAt: snapshot.capturedAt,
+      metrics: snapshot.metrics,
+    }
+  }
+  // detailed 模式包含表格/表单等多类数组；先保持完整返回，避免客户端合并时丢字段。
+  if (!previous || previous.snapshotId !== since || snapshot.mode === "detailed") {
+    return {
+      ...snapshot,
+      incremental: false,
+      baseSnapshotId: since,
+      incrementalFallback: previous ? "base snapshot mismatch or detailed mode" : "base snapshot unavailable",
+    }
+  }
+
+  const previousInteractive = new Map(previous.interactive.map((item) => [item.uid, JSON.stringify(item)]))
+  const currentInteractive = new Map(snapshot.interactive.map((item) => [item.uid, JSON.stringify(item)]))
+  const interactiveUpsert = snapshot.interactive.filter((item) => previousInteractive.get(item.uid) !== JSON.stringify(item))
+  const interactiveRemoved = previous.interactive.filter((item) => !currentInteractive.has(item.uid)).map((item) => item.uid)
+  const delta = { interactiveUpsert, interactiveRemoved }
+  for (const key of ["visibleText", "overview", "topology", "selection"]) {
+    if (JSON.stringify(previous[key]) !== JSON.stringify(snapshot[key])) delta[key] = snapshot[key]
+  }
+  return {
+    snapshotId: snapshot.snapshotId,
+    baseSnapshotId: since,
+    unchanged: false,
+    incremental: true,
+    url: snapshot.url,
+    title: snapshot.title,
+    viewport: snapshot.viewport,
+    capturedAt: snapshot.capturedAt,
+    metrics: snapshot.metrics,
+    delta,
+  }
+}
+
+function fnv1a(text) {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function inspectDocumentTopology() {
+  let shadowRoots = 0
+  try {
+    shadowRoots = queryAllDeep("*").filter((element) => element.shadowRoot).length
+  } catch {
+    /* ignore */
+  }
+  const frames = []
+  for (const frame of [...document.querySelectorAll("iframe,frame")].slice(0, 40)) {
+    let sameOrigin = false
+    let title = null
+    let url = frame.getAttribute("src") || null
+    try {
+      sameOrigin = !!frame.contentDocument
+      if (sameOrigin) {
+        title = frame.contentDocument.title || null
+        url = frame.contentWindow?.location?.href || url
+      }
+    } catch {
+      sameOrigin = false
+    }
+    frames.push({
+      sameOrigin,
+      title,
+      url,
+      name: frame.getAttribute("name") || null,
+      selector: cssPath(frame),
+    })
+  }
+  return {
+    shadowRoots,
+    iframeCount: frames.length,
+    sameOriginFrames: frames.filter((frame) => frame.sameOrigin).length,
+    crossOriginFrames: frames.filter((frame) => !frame.sameOrigin).length,
+    frames,
+  }
 }
 
 // 收集可交互元素，给每个打 data-omeety-uid，返回 uid/role/text/bbox/selector。
@@ -222,6 +335,18 @@ function queryAllDeep(selector, root = document, acc = [], depth = 0) {
   try {
     for (const el of root.querySelectorAll("*")) {
       if (el.shadowRoot) queryAllDeep(selector, el.shadowRoot, acc, depth + 1)
+    }
+  } catch {
+    /* ignore */
+  }
+  // 同源 iframe 可以直接读取并操作；跨域 iframe 由 topology 标记为受限，后续走 CDP/视觉兜底。
+  try {
+    for (const frame of root.querySelectorAll("iframe,frame")) {
+      try {
+        if (frame.contentDocument) queryAllDeep(selector, frame.contentDocument, acc, depth + 1)
+      } catch {
+        /* cross-origin */
+      }
     }
   } catch {
     /* ignore */
@@ -266,7 +391,7 @@ function listInteractive(max = 120) {
   const picked = highs.slice(0, max).concat(lows.slice(0, Math.max(0, max - highs.length)))
   return picked.map((el) => {
     const uid = uidFor(el)
-    const r = el.getBoundingClientRect()
+    const r = getTopViewportRect(el)
     return {
       uid,
       tag: el.tagName.toLowerCase(),
@@ -274,6 +399,8 @@ function listInteractive(max = 120) {
       text: labelOf(el),
       selector: cssPath(el),
       bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+      frameChain: getFrameChain(el),
+      shadowPath: getShadowPath(el),
     }
   })
 }
@@ -319,6 +446,182 @@ function getSelectedContext() {
     text,
     element: element ? describeElement(element) : null,
   }
+}
+
+function getContextBundle(args = {}) {
+  const started = performance.now()
+  const target = resolveContextTarget(args)
+  let scrolledForScreenshot = false
+  if (target && args.includeScreenshot !== false) {
+    const initialRect = getTopViewportRect(target)
+    const outsideViewport =
+      initialRect.x + initialRect.width <= 0 ||
+      initialRect.y + initialRect.height <= 0 ||
+      initialRect.x >= window.innerWidth ||
+      initialRect.y >= window.innerHeight
+    if (outsideViewport) {
+      target.scrollIntoView({ block: "center", inline: "center", behavior: "auto" })
+      scrolledForScreenshot = true
+    }
+  }
+  const selection = String(getSelection()?.toString() || "").trim().slice(0, 8000)
+  const targetDescription = target ? describeContextTarget(target, args) : null
+  const bundle = {
+    version: 1,
+    browserSessionId,
+    url: location.href,
+    title: document.title,
+    selection,
+    target: targetDescription,
+    page: {
+      overview: getPageOverview(),
+      visibleTextAroundTarget: target ? collectAllText(getContextParent(target) || target).replace(/\s+/g, " ").trim().slice(0, 3000) : collectVisibleText(3000),
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        scrollX: Math.round(window.scrollX),
+        scrollY: Math.round(window.scrollY),
+      },
+      topology: inspectDocumentTopology(),
+    },
+    screenshotRequest: targetDescription?.bbox
+      ? { bbox: targetDescription.bbox, padding: clamp(Number(args.screenshotPadding ?? 24), 0, 160) }
+      : null,
+    scrolledForScreenshot,
+    capturedAt: new Date().toISOString(),
+  }
+  bundle.metrics = {
+    buildMs: Math.round((performance.now() - started) * 10) / 10,
+    estimatedBytes: JSON.stringify(bundle).length,
+  }
+  return bundle
+}
+
+function resolveContextTarget(args = {}) {
+  if (args.uid) return findByUid(args.uid)
+  if (args.selector) {
+    const element = queryAllDeep(String(args.selector))[0] || null
+    if (!element) throw new Error(`Context Bundle target not found: ${args.selector}`)
+    return element
+  }
+  const picked = queryAllDeep('[data-omeety-pick="1"]')[0]
+  if (picked) return picked
+  const selection = getSelection()
+  if (selection?.rangeCount) {
+    const node = selection.getRangeAt(0).commonAncestorContainer
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
+    if (element) return element
+  }
+  const active = document.activeElement
+  return active && active !== document.body && active !== document.documentElement ? active : null
+}
+
+function describeContextTarget(element, args = {}) {
+  const bbox = getTopViewportRect(element)
+  const styleWindow = element.ownerDocument?.defaultView || window
+  const style = styleWindow.getComputedStyle(element)
+  const attributes = {}
+  const allowedAttributes = ["aria-label", "aria-describedby", "aria-expanded", "aria-checked", "aria-selected", "title", "name", "type", "placeholder", "alt", "href", "src"]
+  for (const name of allowedAttributes) {
+    const value = element.getAttribute?.(name)
+    if (value) attributes[name] = String(value).slice(0, 500)
+  }
+  const type = String(element.getAttribute?.("type") || "").toLowerCase()
+  const valuePreview = type === "password" ? null : "value" in element ? String(element.value || "").slice(0, 500) : null
+  const ownUid = element === document.body || element === document.documentElement ? null : uidFor(element)
+  const centerX = bbox.x + bbox.width / 2
+  const centerY = bbox.y + bbox.height / 2
+  const nearbyInteractive = listInteractive(clamp(Number(args.maxNearbyInteractive ?? 24), 1, 80))
+    .filter((item) => item.uid !== ownUid)
+    .map((item) => {
+      const x = item.bbox.x + item.bbox.w / 2
+      const y = item.bbox.y + item.bbox.h / 2
+      return { ...item, distance: Math.round(Math.hypot(x - centerX, y - centerY)) }
+    })
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, clamp(Number(args.maxNearbyInteractive ?? 12), 1, 30))
+
+  const ancestors = []
+  let parent = getContextParent(element)
+  while (parent && ancestors.length < 6) {
+    ancestors.push({
+      tag: parent.tagName?.toLowerCase?.() || "document",
+      role: parent.getAttribute?.("role") || null,
+      text: compactText(parent.getAttribute?.("aria-label") || parent.getAttribute?.("title") || ""),
+      selector: parent.tagName ? cssPath(parent) : null,
+    })
+    parent = getContextParent(parent)
+  }
+  return {
+    uid: ownUid,
+    selector: cssPath(element),
+    tag: element.tagName.toLowerCase(),
+    role: element.getAttribute("role") || inferRole(element),
+    accessibleName: labelOf(element),
+    text: compactText(element.innerText || element.textContent || ""),
+    valuePreview,
+    attributes,
+    bbox: { x: Math.round(bbox.x), y: Math.round(bbox.y), w: Math.round(bbox.width), h: Math.round(bbox.height) },
+    visible: isVisible(element),
+    disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
+    editable: Boolean(element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)),
+    styles: {
+      display: style.display,
+      visibility: style.visibility,
+      color: style.color,
+      backgroundColor: style.backgroundColor,
+      font: style.font,
+      cursor: style.cursor,
+      overflowX: style.overflowX,
+      overflowY: style.overflowY,
+    },
+    frameChain: getFrameChain(element),
+    shadowPath: getShadowPath(element),
+    ancestors,
+    nearbyInteractive,
+  }
+}
+
+function getVerificationState(args = {}) {
+  let target = null
+  try {
+    if (args.uid) target = findByUid(args.uid)
+    else if (args.selector) target = queryAllDeep(String(args.selector))[0] || null
+  } catch {
+    target = null
+  }
+  const targetState = target
+    ? {
+        exists: true,
+        visible: isVisible(target),
+        text: compactText(target.innerText || target.textContent || ""),
+        accessibleName: labelOf(target),
+        role: target.getAttribute("role") || inferRole(target),
+        value: "value" in target && String(target.type || "").toLowerCase() !== "password" ? String(target.value || "").slice(0, 1000) : null,
+        checked: "checked" in target ? Boolean(target.checked) : null,
+        disabled: Boolean(target.disabled || target.getAttribute("aria-disabled") === "true"),
+        bbox: (() => {
+          const r = getTopViewportRect(target)
+          return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
+        })(),
+      }
+    : { exists: false }
+  const visibleText = collectVisibleText(6000)
+  return {
+    url: location.href,
+    title: document.title,
+    textDigest: fnv1a(visibleText),
+    target: targetState,
+    capturedAt: new Date().toISOString(),
+  }
+}
+
+function inferRole(element) {
+  const roles = { A: "link", BUTTON: "button", INPUT: "textbox", TEXTAREA: "textbox", SELECT: "combobox", IMG: "img" }
+  if (element.tagName === "INPUT" && ["button", "submit", "reset"].includes(String(element.type).toLowerCase())) return "button"
+  if (element.tagName === "INPUT" && String(element.type).toLowerCase() === "checkbox") return "checkbox"
+  return roles[element.tagName] || null
 }
 
 async function fetchWithCookie(args) {
@@ -608,6 +911,13 @@ function collectAllText(root = document.body) {
       if (el.shadowRoot) out += "\n" + collectAllText(el.shadowRoot)
     }
   } catch { /* ignore */ }
+  try {
+    for (const frame of root?.querySelectorAll ? root.querySelectorAll("iframe,frame") : []) {
+      try {
+        if (frame.contentDocument?.body) out += "\n" + collectAllText(frame.contentDocument.body)
+      } catch { /* cross-origin */ }
+    }
+  } catch { /* ignore */ }
   return out
 }
 // 轮询等待页面状态就绪（选择器出现 / 文本出现）。agent 在 navigate/click 之后用它代替瞎等固定秒数。
@@ -616,36 +926,78 @@ async function waitFor(args) {
   const timeoutMs = clamp(Number(args.timeoutMs ?? 10000), 500, 60000)
   const selector = args.selector ? String(args.selector) : null
   const text = args.text ? String(args.text) : null
-  if (!selector && !text) throw new Error("wait_for 需要 selector 或 text")
+  const selectorGone = args.selectorGone ? String(args.selectorGone) : null
+  const textGone = args.textGone ? String(args.textGone) : null
+  const urlIncludes = args.urlIncludes ? String(args.urlIncludes) : null
+  const titleIncludes = args.titleIncludes ? String(args.titleIncludes) : null
+  const valueEquals = args.valueEquals !== undefined ? String(args.valueEquals) : null
+  const valueIncludes = args.valueIncludes !== undefined ? String(args.valueIncludes) : null
+  const checked = typeof args.checked === "boolean" ? args.checked : null
+  if (![selector, text, selectorGone, textGone, urlIncludes, titleIncludes, valueEquals, valueIncludes, checked].some((value) => value !== null)) {
+    throw new Error("wait_for 需要 selector/text/url/title/value/checked 等至少一个条件")
+  }
   const started = Date.now()
   const probe = () => {
-    if (selector) {
-      let el = null
+    const conditions = []
+    const findVisible = (query) => {
+      let element = null
       try {
-        el = queryAllDeep(selector)[0] || null
+        element = queryAllDeep(query)[0] || null
       } catch {
-        el = document.querySelector(selector)
+        try { element = document.querySelector(query) } catch { element = null }
       }
-      if (el && isVisible(el)) return { kind: "selector", el }
+      return element && isVisible(element) ? element : null
     }
+    if (selector) {
+      const element = findVisible(selector)
+      conditions.push({ kind: "selector", matched: !!element, element })
+    }
+    if (selectorGone) conditions.push({ kind: "selectorGone", matched: !findVisible(selectorGone), element: null })
+    let bodyText = null
     if (text) {
-      const bodyText = collectAllText(document.body) // 穿透 shadow root（飞书等大量内容在 shadow 里）
-      if (bodyText.includes(text)) return { kind: "text", el: null }
+      bodyText = collectAllText(document.body)
+      conditions.push({ kind: "text", matched: bodyText.includes(text), element: null })
     }
-    return null
+    if (textGone) {
+      bodyText = bodyText ?? collectAllText(document.body)
+      conditions.push({ kind: "textGone", matched: !bodyText.includes(textGone), element: null })
+    }
+    if (urlIncludes) conditions.push({ kind: "urlIncludes", matched: location.href.includes(urlIncludes), element: null })
+    if (titleIncludes) conditions.push({ kind: "titleIncludes", matched: document.title.includes(titleIncludes), element: null })
+    if (valueEquals !== null || valueIncludes !== null || checked !== null) {
+      let target = null
+      try {
+        if (args.targetUid) target = findByUid(args.targetUid)
+        else if (args.targetSelector) target = queryAllDeep(String(args.targetSelector))[0] || null
+      } catch { target = null }
+      const value = target && "value" in target ? String(target.value ?? "") : ""
+      if (valueEquals !== null) conditions.push({ kind: "valueEquals", matched: !!target && value === valueEquals, element: target })
+      if (valueIncludes !== null) conditions.push({ kind: "valueIncludes", matched: !!target && value.includes(valueIncludes), element: target })
+      if (checked !== null) conditions.push({ kind: "checked", matched: !!target && Boolean(target.checked) === checked, element: target })
+    }
+    const matched = args.match === "all" ? conditions.every((condition) => condition.matched) : conditions.some((condition) => condition.matched)
+    return { matched, conditions }
   }
   for (;;) {
-    const hit = probe()
-    if (hit) {
+    const result = probe()
+    if (result.matched) {
+      const hit = result.conditions.find((condition) => condition.matched)
       return {
         found: true,
-        matchedBy: hit.kind,
+        matchedBy: args.match === "all" ? "all" : hit?.kind,
+        conditions: result.conditions.map((condition) => ({ kind: condition.kind, matched: condition.matched })),
         waitedMs: Date.now() - started,
-        element: hit.el ? describeElement(hit.el) : null,
+        element: hit?.element ? describeElement(hit.element) : null,
       }
     }
     // background 的跨导航等待每次只做立即探测，避免把长 Promise 留在即将销毁的旧文档中。
-    if (args.probeOnly) return { found: false, waitedMs: Date.now() - started }
+    if (args.probeOnly) {
+      return {
+        found: false,
+        conditions: result.conditions.map((condition) => ({ kind: condition.kind, matched: condition.matched })),
+        waitedMs: Date.now() - started,
+      }
+    }
     if (Date.now() - started >= timeoutMs) {
       return { found: false, timeout: true, waitedMs: Date.now() - started }
     }
@@ -851,27 +1203,45 @@ function insertTemporaryHtml(target, position, html, patchId) {
 
 function collectVisibleText(maxTextLength) {
   if (maxTextLength <= 0) return ""
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const text = node.nodeValue?.replace(/\s+/g, " ").trim()
-      if (!text) return NodeFilter.FILTER_REJECT
-      return isVisible(node.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    },
-  })
   let out = ""
-  while (walker.nextNode() && out.length < maxTextLength) {
-    out += `${walker.currentNode.nodeValue.replace(/\s+/g, " ").trim()}\n`
+  const visited = new Set()
+  const collect = (root, depth = 0) => {
+    if (!root || depth > 15 || out.length >= maxTextLength || visited.has(root)) return
+    visited.add(root)
+    const treeRoot = root.body || root
+    const ownerDocument = treeRoot.ownerDocument || (root.nodeType === Node.DOCUMENT_NODE ? root : document)
+    const walker = ownerDocument.createTreeWalker(treeRoot, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const text = node.nodeValue?.replace(/\s+/g, " ").trim()
+        if (!text) return NodeFilter.FILTER_REJECT
+        return isVisible(node.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      },
+    })
+    while (walker.nextNode() && out.length < maxTextLength) {
+      out += `${walker.currentNode.nodeValue.replace(/\s+/g, " ").trim()}\n`
+    }
+    try {
+      for (const element of treeRoot.querySelectorAll("*")) {
+        if (element.shadowRoot) collect(element.shadowRoot, depth + 1)
+      }
+      for (const frame of treeRoot.querySelectorAll("iframe,frame")) {
+        try {
+          if (frame.contentDocument) collect(frame.contentDocument, depth + 1)
+        } catch { /* cross-origin */ }
+      }
+    } catch { /* ignore */ }
   }
+  collect(document)
   return out.slice(0, maxTextLength)
 }
 
 function getPageOverview() {
-  const visibleButtons = [...document.querySelectorAll("button,input[type=button],input[type=submit]")]
+  const visibleButtons = queryAllDeep("button,input[type=button],input[type=submit]")
     .filter(isVisible)
     .slice(0, 20)
     .map((element) => compactText(element.innerText || element.value || element.getAttribute("aria-label") || ""))
     .filter(Boolean)
-  const visibleInputs = [...document.querySelectorAll("input,textarea,select,[contenteditable=true]")]
+  const visibleInputs = queryAllDeep("input,textarea,select,[contenteditable=true]")
     .filter(isVisible)
     .slice(0, 20)
     .map((element) => ({
@@ -881,16 +1251,14 @@ function getPageOverview() {
       label: findLabel(element),
     }))
   return {
-    heading: compactText(document.querySelector("h1,h2,h3,[role=heading]")?.innerText || ""),
+    heading: compactText(queryAllDeep("h1,h2,h3,[role=heading]").find(isVisible)?.innerText || ""),
     path: location.hash || location.pathname,
     counts: {
-      forms: document.forms.length,
-      buttons: [...document.querySelectorAll("button,input[type=button],input[type=submit]")].filter(isVisible)
-        .length,
-      links: [...document.querySelectorAll("a[href]")].filter(isVisible).length,
-      inputs: [...document.querySelectorAll("input,textarea,select,[contenteditable=true]")].filter(isVisible)
-        .length,
-      tables: [...document.querySelectorAll("table")].filter(isVisible).length,
+      forms: queryAllDeep("form").filter(isVisible).length,
+      buttons: queryAllDeep("button,input[type=button],input[type=submit]").filter(isVisible).length,
+      links: queryAllDeep("a[href]").filter(isVisible).length,
+      inputs: queryAllDeep("input,textarea,select,[contenteditable=true]").filter(isVisible).length,
+      tables: queryAllDeep("table").filter(isVisible).length,
     },
     sampleButtons: visibleButtons,
     sampleInputs: visibleInputs,
@@ -993,12 +1361,87 @@ function restoreElement(record) {
 
 function isVisible(element) {
   if (!element) return false
-  const style = getComputedStyle(element)
+  const styleWindow = element.ownerDocument?.defaultView || window
+  const style = styleWindow.getComputedStyle(element)
   if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
     return false
   }
   const rect = element.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
+  if (!(rect.width > 0 && rect.height > 0)) return false
+  try {
+    const frameElement = element.ownerDocument?.defaultView?.frameElement
+    if (frameElement && !isVisible(frameElement)) return false
+  } catch {
+    /* cross-origin elements are never directly reached here */
+  }
+  return true
+}
+
+function getContextParent(element) {
+  if (!element) return null
+  if (element.parentElement) return element.parentElement
+  const root = element.getRootNode?.()
+  if (root?.host) return root.host
+  try {
+    return element.ownerDocument?.defaultView?.frameElement || null
+  } catch {
+    return null
+  }
+}
+
+function getTopViewportRect(element) {
+  const rect = element.getBoundingClientRect()
+  let x = rect.x
+  let y = rect.y
+  let currentWindow = element.ownerDocument?.defaultView
+  let guard = 0
+  while (currentWindow && currentWindow !== currentWindow.top && guard++ < 12) {
+    try {
+      const frame = currentWindow.frameElement
+      if (!frame) break
+      const frameRect = frame.getBoundingClientRect()
+      x += frameRect.x + (frame.clientLeft || 0)
+      y += frameRect.y + (frame.clientTop || 0)
+      currentWindow = frame.ownerDocument?.defaultView
+    } catch {
+      break
+    }
+  }
+  return { x, y, width: rect.width, height: rect.height }
+}
+
+function getFrameChain(element) {
+  const chain = []
+  let currentWindow = element.ownerDocument?.defaultView
+  let guard = 0
+  while (currentWindow && currentWindow !== currentWindow.top && guard++ < 12) {
+    try {
+      const frame = currentWindow.frameElement
+      if (!frame) break
+      chain.unshift({
+        selector: cssPath(frame),
+        name: frame.getAttribute("name") || null,
+        src: frame.getAttribute("src") || null,
+      })
+      currentWindow = frame.ownerDocument?.defaultView
+    } catch {
+      break
+    }
+  }
+  return chain
+}
+
+function getShadowPath(element) {
+  const path = []
+  let current = element
+  let guard = 0
+  while (current && guard++ < 12) {
+    const root = current.getRootNode?.()
+    if (!root?.host) break
+    path.unshift({ tag: root.host.tagName.toLowerCase(), selector: cssPath(root.host) })
+    current = root.host
+  }
+  return path
 }
 
 function cssPath(element) {

@@ -2,13 +2,14 @@
 // terminal.bundle.js（经典脚本）先加载，暴露 window.Terminal / window.FitAddon / window.WebglAddon /
 // window.SearchAddon / window.WebLinksAddon / window.ClipboardAddon。
 
-export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSizeChange, onTitleChange }) {
+export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollback: initialScrollback, onFontSizeChange, onTitleChange }) {
   let fontSize = Number(initialFontSize) >= 8 && Number(initialFontSize) <= 28 ? Math.round(Number(initialFontSize)) : 12
+  const normalizeScrollback = (value) => Math.max(1000, Math.min(50000, Math.round(Number(value) || 5000)))
   const term = new window.Terminal({
     cursorBlink: false, // 关闭光标闪烁——codex/TUI 会发 ?12h 启用闪烁，下面 writeBatch 里每次都追加 ?12l 强制覆盖
     fontFamily: "Cascadia Mono, Consolas, 'Microsoft YaHei', monospace",
     fontSize,
-    scrollback: 10000, // 真实终端体验：回滚 buffer 给足（原 3000，大输出一翻就到底）
+    scrollback: normalizeScrollback(initialScrollback),
     smoothScrollDuration: 0,
     scrollSensitivity: 3, // 滚轮滚动幅度（默认 1 偏慢；3 更跟手、少滚轮圈数）
     fastScrollSensitivity: 8, // 按住 Alt + 滚轮时大幅翻页
@@ -237,18 +238,33 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSi
     console.warn("[omeety] _syncTextArea 锚点守卫安装失败：", e)
   }
 
-  // GPU 渲染：滚动/重绘明显更流畅。WebGL 不可用（老显卡/无 GPU/硬件加速关）则退回默认 DOM 渲染。
+  // 同一时刻只给活动 tab 保留 WebGL 上下文。非活动 tab 继续解析 PTY 输出、维护完整
+  // buffer，但释放 GPU renderer；切回时再恢复 WebGL。这样多 tab 不会按 tab 数累积纹理/
+  // canvas 显存，也不影响后台 CLI Agent 持续运行。
+  let webglAddon = null
+  let renderActive = true
   hostEl.dataset.omeetyRenderer = "dom"
-  try {
-    if (window.WebglAddon) {
-      term.loadAddon(new window.WebglAddon())
+  function enableWebgl() {
+    if (webglAddon || !renderActive || !window.WebglAddon) return
+    try {
+      webglAddon = new window.WebglAddon()
+      term.loadAddon(webglAddon)
       hostEl.dataset.omeetyRenderer = "webgl"
-      cgWrapRenderRows() // 包装新的 WebGL renderer（初始 DOM renderer 已包过，此处换对象）
+      cgWrapRenderRows()
+    } catch (e) {
+      webglAddon = null
+      hostEl.dataset.omeetyRenderer = "dom-fallback"
+      console.warn("[omeety] WebGL 渲染器加载失败，退回 DOM：", e)
     }
-  } catch (e) {
-    hostEl.dataset.omeetyRenderer = "dom-fallback"
-    console.warn("[omeety] WebGL 渲染器加载失败，退回 DOM：", e)
   }
+  function disableWebgl() {
+    if (webglAddon) {
+      try { webglAddon.dispose() } catch { /* ignore */ }
+      webglAddon = null
+    }
+    hostEl.dataset.omeetyRenderer = renderActive ? "dom-fallback" : "suspended"
+  }
+  enableWebgl()
 
   // 终端内搜索：Ctrl+F 唤起搜索条（见下方 searchBar）
   let search = null
@@ -333,19 +349,15 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSi
 
   // ---- 复制 / 粘贴 / 换行 ----
   // 复制：选中即自动复制（mouseup）；也可 Ctrl+Shift+C / Ctrl+Insert。
-  // 粘贴：Ctrl+V / Ctrl+Shift+V / Shift+Insert；或右键。
+  // 粘贴：Ctrl+V / Ctrl+Shift+V / Cmd+V / Shift+Insert；或右键。
   //   注意：不能放任 xterm 处理 Ctrl+V——它会把 ^V(0x16) 当“字面量下一字符”发给 PTY，和粘贴内容混在一起。
   //   所以这里一律拦截这些键、自己读剪贴板、return false 让 xterm 跳过默认处理。
-  // bracketed paste：对端开了 2004 模式（PSReadLine、claude code、bash 5.1+ readline）时，
-  //   用 \x1b[200~ ... \x1b[201~ 包裹——多行粘贴进 claude 输入框不会逐行提交，而是整体进编辑框。
-  //   没开 bracketed 模式时把换行统一成 \r（Enter 的语义），避免 \n 被某些 readline 当成“插入新行”。
+  // 所有入口统一交给 xterm 的 paste()：它会按终端当前的 2004 模式生成一个完整的
+  // bracketed-paste 事件，并统一换行。Codex 只有收到 Paste 事件，才会把超过阈值的长文本
+  // 折叠成 [Pasted Content … chars]；直接向 PTY 写普通文本虽然内容相同，却会被当成逐字输入。
   const sendPaste = (t) => {
     if (!t) return
-    if (term.modes?.bracketedPasteMode) {
-      send({ type: "input", data: "\x1b[200~" + t + "\x1b[201~" })
-    } else {
-      send({ type: "input", data: t.replace(/\r\n|[\r\n]/g, "\r") })
-    }
+    term.paste(t)
   }
   const clipWrite = (t) => {
     try {
@@ -516,9 +528,9 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSi
       return false
     }
 
-    // 粘贴：Ctrl+V / Ctrl+Shift+V / Shift+Insert
+    // 粘贴：Ctrl+V / Ctrl+Shift+V / Cmd+V / Shift+Insert
     const isPaste =
-      (e.ctrlKey && !e.altKey && e.code === "KeyV") ||
+      ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyV") ||
       (e.shiftKey && !e.ctrlKey && !e.altKey && e.code === "Insert")
     if (isPaste) {
       if (e.repeat) return false // 按住自动重复不重复粘贴
@@ -704,6 +716,24 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSi
     resize: applyFit,
     focus() { if (!_disposed) term.focus() },
     clear() { if (!_disposed) term.clear() },
+    setActive(active) {
+      if (_disposed) return
+      renderActive = !!active
+      if (renderActive) {
+        enableWebgl()
+        requestAnimationFrame(() => {
+          if (_disposed) return
+          applyFit()
+          try { term.refresh(0, Math.max(0, term.rows - 1)) } catch { /* ignore */ }
+        })
+      } else {
+        disableWebgl()
+      }
+    },
+    setScrollback(lines) {
+      if (_disposed) return
+      try { term.options.scrollback = normalizeScrollback(lines) } catch { /* ignore */ }
+    },
     // 按 tab 开关"codex 标点兼容"（弯引号等转直引号等价物），见 onData 里 punctCompat。
     setPunctCompat(on) { punctCompat = !!on },
     // 关 tab 时调：取消 pending rAF/定时器（否则会对已 dispose 的 term.write 报错 + 闭包不 GC）+ term.dispose。
@@ -718,6 +748,7 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, onFontSi
       _coalesceT = 0
       _scheduled = false
       _pending = ""
+      disableWebgl()
       try { term.dispose() } catch { /* ignore */ }
     },
   }

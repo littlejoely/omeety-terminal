@@ -4,7 +4,7 @@ export const TOOLS = [
   {
     name: "omeety_get_page_snapshot",
     description:
-      "Capture a snapshot of the current page: url/title/visibleText/overview + interactive[] (each element has a stable uid, role, text, bbox, selector) + viewport{width,height,devicePixelRatio,scrollX,scrollY}. Pass an element's uid to omeety_click/fill/type_text/select — far more reliable than guessing CSS selectors (SPAs use dynamic classes). If an item has NO uid (a plain <div> like Feishu chat-list rows), use omeety_click_text on its visible text instead. Works for ALL models including text-only — the DEFAULT choice. Note: snapshot bbox is in CSS pixels; omeety_capture_visible_tab returns physical pixels (= CSS × devicePixelRatio) — divide screenshot coords by dpr before click_at.",
+      "Capture a snapshot of the current page: url/title/visibleText/overview/topology + interactive[] (stable uid, role, text, bbox, selector, frame/shadow path) + viewport and build metrics. Traverses open Shadow DOM and same-origin iframes. Pass sinceSnapshotId from a previous response to receive an unchanged marker or light-mode delta instead of another full snapshot. Pass uid to click/fill/type/select. Snapshot bbox is in CSS pixels; screenshot pixels may differ by DPR.",
     inputSchema: {
       type: "object",
       properties: {
@@ -12,6 +12,7 @@ export const TOOLS = [
         includeElements: { type: "boolean" },
         maxTextLength: { type: "integer", minimum: 0, maximum: 60000 },
         maxInteractive: { type: "integer", minimum: 1, maximum: 500, default: 120 },
+        sinceSnapshotId: { type: "string", description: "Previous snapshotId; light mode returns only changes when the base is still cached" },
       },
     },
   },
@@ -19,6 +20,25 @@ export const TOOLS = [
     name: "omeety_get_selected_context",
     description: "Return the user's current text selection plus its enclosing element.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "omeety_get_context_bundle",
+    description:
+      "Build a compact multimodal Context Bundle around uid/selector, the sidebar pick, current text selection, or focused element. Returns accessibility-like identity, safe attributes/value preview, computed styles, ancestors, nearby interactive elements, iframe/Shadow DOM paths, page overview/topology, diagnostics, performance metrics, and by default a cropped element screenshot as a real MCP image content block. This is the preferred 'understand this element' tool.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uid: { type: "string" },
+        selector: { type: "string" },
+        includeScreenshot: { type: "boolean", default: true },
+        screenshotPadding: { type: "integer", minimum: 0, maximum: 160, default: 24 },
+        screenshotMaxWidth: { type: "integer", minimum: 320, maximum: 1280, default: 900 },
+        maxNearbyInteractive: { type: "integer", minimum: 1, maximum: 30, default: 12 },
+        attachDebugger: { type: "boolean", description: "Attach CDP to start/read Console diagnostics; may show Chrome's debugging banner" },
+        includeAllConsole: { type: "boolean" },
+        consoleLimit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+      },
+    },
   },
   {
     name: "omeety_fetch_with_cookie",
@@ -85,6 +105,34 @@ export const TOOLS = [
         waitForText: { type: "string", description: "After click, wait until this text appears in the page before returning" },
         waitForTimeoutMs: { type: "integer", minimum: 500, maximum: 60000, default: 5000 },
       },
+    },
+  },
+  {
+    name: "omeety_act_and_verify",
+    description:
+      "Execute one browser action and verify its postcondition as a single transaction. Supports click/click_text/fill/type/press/select, preserves dangerous-action confirmation, can use real CDP input, survives reload/navigation while waiting, and returns before/after state plus timing. Provide expect for strong verification; fill/type/select infer a value postcondition automatically. Without expect, verification is weaker and only checks an observed page/target state change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select"] },
+        uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
+        text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
+        cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" },
+        timeoutMs: { type: "integer", minimum: 500, maximum: 60000, default: 8000 },
+        settleMs: { type: "integer", minimum: 50, maximum: 2000, default: 250 },
+        expect: {
+          type: "object",
+          properties: {
+            selector: { type: "string" }, text: { type: "string" },
+            selectorGone: { type: "string" }, textGone: { type: "string" },
+            urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
+            valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+            match: { type: "string", enum: ["all", "any"], default: "all" },
+            timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
+          },
+        },
+      },
+      required: ["action"],
     },
   },
   {
@@ -250,12 +298,26 @@ export const TOOLS = [
     },
   },
   {
+    name: "omeety_get_runtime_metrics",
+    description:
+      "Return Omeety browser-runtime performance and reliability metrics for this service-worker lifetime: per-tool calls/successes/failures/average/max/last latency, totals, uptime, Native connection, side-panel connections, replay-buffer size, and attached CDP tab count. Use when diagnosing slowness or reliability regressions.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "omeety_wait_for",
     description:
-      "Wait until a CSS selector matches a visible element OR a text string appears in the page, polling every 200ms up to timeoutMs (default 10000, max 60000). The wait survives reloads, cross-document navigation, and BFCache transitions. Call after navigate/click instead of guessing fixed sleeps.",
+      "Wait for one or all page postconditions: selector/text appears, selector/text disappears, URL/title contains, target value equals/includes, or checked state. Polls every 200ms and survives reload, navigation, and BFCache. Defaults to any condition; match:'all' requires every condition.",
     inputSchema: {
       type: "object",
-      properties: { selector: { type: "string" }, text: { type: "string" }, timeoutMs: { type: "integer", minimum: 500, maximum: 60000 } },
+      properties: {
+        selector: { type: "string" }, text: { type: "string" },
+        selectorGone: { type: "string" }, textGone: { type: "string" },
+        urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
+        targetUid: { type: "string" }, targetSelector: { type: "string" },
+        valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+        match: { type: "string", enum: ["all", "any"], default: "any" },
+        timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
+      },
     },
   },
   {

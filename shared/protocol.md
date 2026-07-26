@@ -6,18 +6,23 @@
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `hello` | `shell, cols, rows` | 端口连上后第一条。host 据此 spawn PTY（只 spawn 一次；之后只 resize） |
+| `hello` | `sid, shell, cols, rows, title?, renamed?, punctCompat?` | 创建或重新挂接一个终端会话；已存在时只 resize 并更新元数据 |
 | `input` | `data:string` | 终端击键/粘贴 → PTY stdin |
 | `resize` | `cols, rows` | xterm 尺寸变化 → `pty.resize` |
-| `replay_request` | `sid` | 面板建好 tab 后请求回放该会话最近输出（SW 侧 64KB 环形缓冲；同 sid 优先，无则全量兜底） |
+| `restart` | `sid, shell, cols, rows` | 原子替换指定会话的 PTY |
+| `list_sessions` | — | 请求 host 当前仍存活的全部 PTY 会话 |
+| `session_meta` | `sid, title?, renamed?, punctCompat?` | 更新可恢复的 Tab 元数据 |
+| `panel_state` | `open, keepAliveMode` | 侧栏开关与保活策略（`always` / `30m` / `close`） |
+| `replay_request` | `sid` | 面板建好 tab 后请求回放该会话最近输出（SW 侧全局 64KB 环形缓冲，只回放同 sid） |
 | `tool_result` | `id, ok, result?, error?` | content.js/SW 的工具结果，完成一个挂起的 `tool_call` |
-| `shutdown` | — | 退出 host |
+| `shutdown` | `sid?` | 有 sid 时关闭单个 PTY；无 sid 时退出整个 host |
 
 ## host → 扩展（写到 host stdout）
 
 | type | 字段 | 说明 |
 |---|---|---|
-| `output` | `data:string` | PTY stdout/stderr 字节 → `term.write` |
+| `output` | `sid, data:string` | 指定 PTY stdout/stderr 字节 → 对应 Tab 的 `term.write` |
+| `sessions_list` | `sessions[]` | 当前存活会话及标题、shell、兼容设置，供侧栏重建全部 Tab |
 | `tool_call` | `id, name, args` | MCP `tools/call` 到达 → 请扩展在活动标签页执行 |
 | `status` | `state:"ready"\|"pty_exit"\|"mcp_error"\|"disconnected", msg?` | 生命周期信号 |
 
@@ -32,14 +37,23 @@ agent → MCP POST /messages(tools/call)
 超时 60s。
 ```
 
+工具成功结果默认以 MCP `text` content 返回。结果对象中的图片 `dataUrl` 会在
+host 侧拆成标准 MCP `image` content，并在 JSON 中保留占位标记，避免模型只能
+看到一长串 base64。`omeety_get_context_bundle` 因而可以在一次调用中同时交付
+目标语义、周边 DOM、诊断信息和局部截图。
+
+轻量页面快照返回 `snapshotId`；下一次传 `sinceSnapshotId` 时，内容未变化只返回
+`unchanged` 标记，有变化则返回交互元素增删改与页面摘要差异。动作工具优先使用
+`omeety_act_and_verify`，把操作和跨导航后置条件放在同一事务中。
+
 ## host 内部三件套
 
-同一 Node 进程：① nm-stdio（与扩展）② PTY（node-pty + ConPTY，真实 shell）③ MCP SSE（express，`127.0.0.1:49171`，`/sse` + `/messages`）。host 由浏览器在 `connectNative` 时拉起，端口断开时被杀——所以 MCP 仅在终端面板打开时在线。
+同一 Node 进程：① nm-stdio（与扩展）② PTY（node-pty + ConPTY/Unix PTY，真实 shell）③ MCP Streamable HTTP（`127.0.0.1:49171/mcp`，兼容旧 `/sse` + `/messages`）。host 由浏览器在 `connectNative` 时拉起；侧栏关闭后是否继续运行由保活策略决定。
 
 ## 命名
 
 - native host：`com.omeety.terminal`
 - 扩展 ID（manifest key 固定）：`fjhjkmpldbepgcpfkhpolnnheccjaamg`
 - MCP server 名 / 各 agent 配置里的 id：`omeety_terminal`
-- 工具前缀：`omeety_*`（26 个）
-- MCP 端口：`49171`（SSE URL：`http://127.0.0.1:49171/sse`）
+- 工具前缀：`omeety_*`（31 个）
+- MCP 端口：`49171`（Streamable HTTP：`http://127.0.0.1:49171/mcp`）

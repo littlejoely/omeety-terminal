@@ -53,12 +53,29 @@
       </select>
       <input id="shellCustom" type="text" placeholder="如 /bin/zsh" hidden />
 
+      <label>终端回滚行数</label>
+      <select id="scrollbackSelect">
+        <option value="3000">3,000（更省内存）</option>
+        <option value="5000">5,000（推荐）</option>
+        <option value="10000">10,000（更多历史）</option>
+        <option value="20000">20,000（高内存占用）</option>
+      </select>
+      <p class="muted small">每个终端 Tab 独立计算；Tab 越多，回滚行数越大，占用越高。</p>
+
+      <label>关闭侧栏后的终端会话</label>
+      <select id="keepAliveSelect">
+        <option value="always">持续保活（保持现有行为）</option>
+        <option value="30m">空闲 30 分钟后结束</option>
+        <option value="close">立即结束</option>
+      </select>
+      <p class="muted small">重新打开侧栏时会恢复仍在运行的全部终端 Tab；退出浏览器仍会结束会话。</p>
+
       <label>MCP 端口</label>
       <input id="mcpPort" type="text" value="49171" readonly />
       <p class="muted small">claude/codex/kimi 的配置在安装时自动写入：<code>http://127.0.0.1:49171/mcp</code></p>
 
       <div class="actions-row">
-        <button id="saveBtn" class="primary">保存并重连</button>
+        <button id="saveBtn" class="primary">保存设置</button>
         <button id="backBtn" class="ghost">返回终端</button>
       </div>
 

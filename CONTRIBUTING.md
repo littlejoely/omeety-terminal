@@ -28,8 +28,8 @@ keys, access tokens, or unreviewed `host-debug.log` files.
 
 Requirements / 环境：
 
-- Windows 11 (current verified platform)
-- Microsoft Edge or Chrome
+- Windows 11 or macOS (current verified platforms)
+- Microsoft Edge or Google Chrome
 - Node.js LTS
 - Python + Playwright only for headed browser probes
 
@@ -53,11 +53,17 @@ the native host or MCP configuration.
 
 Fast, profile-free checks / 快速无浏览器测试：
 
-```powershell
-node _test\extension-runtime-regression.mjs
-node _test\mcp-protocol-smoke.mjs
-node _test\mock-native.mjs
+```bash
+cd host
+npm test
 ```
+
+The smoke runner has a 30-second hard timeout and cleans up its Host/PTY on
+success, failure, interruption, and timeout. Do not register it as a persistent
+`launchctl` or Task Scheduler job.
+
+冒烟测试内置 30 秒硬超时，并在成功、失败、中断和超时时清理 Host/PTY；不要把它
+注册成常驻 `launchctl` 或 Windows 计划任务。
 
 Headed Edge probes use isolated profiles and ports. See
 [`_pwtest/README.md`](_pwtest/README.md). The settings reconnect regression is:

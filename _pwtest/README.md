@@ -11,6 +11,12 @@ the scripts from this directory with Python and Playwright installed.
 - `test_ime_composition.py` checks the xterm textarea and IME composition anchor.
 - `test_settings_reconnect.py` switches shells through Settings and verifies the
   atomic PTY restart, the restored settings icon, and custom-shell persistence.
+- `test_tab_render_budget.py` is a headless six-tab regression that verifies
+  inactive terminals release WebGL and rapid switching keeps exactly one GPU renderer.
+- `test_paste_protocol.py` is a headless macOS/terminal paste regression that verifies
+  Cmd+V and right-click deliver long content once as one bracketed-paste event.
+- `test_context_bundle.py` verifies Context Bundle v1, real Shadow DOM and
+  same-origin iframe discovery, incremental snapshots, and compound postconditions.
 - `test_cursor_probe.py` contains shared setup and cursor-state inspection.
 - `test_browser_tool_reliability.py` uses a temporary profile and local strict-CSP
   pages to verify CDP `execute_js` and click/wait recovery across navigation. It

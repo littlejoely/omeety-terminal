@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
-[![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#browser-tools-28)
+[![MCP tools: 31](https://img.shields.io/badge/MCP_tools-31-5ee7b1?style=flat-square)](#browser-tools-31)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
 terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
 and any MCP-capable CLI the same eyes and hands for your active web page.**
 
 [3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
-[How it works](#how-it-works) · [28 browser tools](#browser-tools-28) ·
+[How it works](#how-it-works) · [31 browser tools](#browser-tools-31) ·
 [Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
 ![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
 
 > This reproducible demo uses a deterministic local MCP client and the real
 > extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
-> and Kimi Code use the same 28 tools. No model account or prerecorded model
+> and Kimi Code use the same 31 tools. No model account or prerecorded model
 > response is involved.
 
 There is no dedicated chat mode or model switch. Omeety remains a real shell:
@@ -118,9 +118,10 @@ another closed agent:
 5. Add permission groups, read-only mode, and domain boundaries as optional
    safety layers rather than model-specific policy.
 
-The immediate priority is **reliability**: terminal I/O and browser tools must
-first report real outcomes, trustworthy failures, and survive navigation.
-Multi-selection and Context Bundles are the next focus.
+The immediate priority remains **reliability**: terminal I/O and browser tools
+must report real outcomes, trustworthy failures, and survive navigation.
+Context Bundle v1 and post-action verification are now implemented; continuous
+multi-selection, cross-origin iframe fallbacks, and finer network telemetry are next.
 
 ## How it works
 
@@ -135,10 +136,10 @@ Side-panel extension [ xterm.js terminal ]  <- Native Messaging ->  local Node h
 ```
 
 - The browser starts the host when the terminal panel first opens. An offscreen
-  keepalive then keeps the host and PTYs running while the side panel is closed.
-- Reopening the panel reuses the sessions and replays a limited recent-output
-  buffer. Exiting the browser, reloading the extension, or a host failure ends
-  the sessions.
+  document then follows the configured policy: keep sessions indefinitely,
+  reclaim them after 30 idle minutes, or end them when the panel closes.
+- Reopening the panel asks the host for its live session list, restores every
+  running terminal tab, and replays a limited recent-output buffer.
 - One local process handles terminal I/O, the PTY, and the MCP server.
 
 ## Prerequisite: a local Native Messaging host
@@ -197,35 +198,44 @@ Then load the extension:
    that a real terminal has full local user permissions.
 2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
    `claude`, `codex`, or `kimi`.
-3. Inside an agent, verify that `omeety_terminal` and its 28 `omeety_*` tools
+3. Inside an agent, verify that `omeety_terminal` and its 31 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
-4. Use the settings button to select the system shell, zsh/bash/fish,
-   PowerShell/cmd/Git Bash, or a custom shell executable.
+4. Use Settings to select a shell, configure per-tab scrollback, and choose the
+   session policy used after the side panel closes.
 
 ## Terminal shortcuts and features
 
 - **Ctrl+F** searches terminal output; Enter finds the next match,
   Shift+Enter the previous match, and Esc closes search.
 - **Ctrl+click** opens a terminal URL in a browser tab.
-- Selecting text copies it; **Ctrl+V** and right-click paste with bracketed
-  paste support.
+- Selecting text copies it; **Ctrl+V**, **Cmd+V**, and right-click use bracketed
+  paste so Codex can collapse long content and multiline input is not submitted line by line.
 - **Ctrl+wheel**, **Ctrl+=**, **Ctrl+-**, and **Ctrl+0** adjust or reset the
   persistent font size.
 - **Ctrl+Alt+T** opens a terminal tab, **Ctrl+Alt+W** closes the active tab, and
   **Ctrl+Alt+Left/Right** changes tabs.
 - Click a tab to switch, middle-click to close, or right-click to rename it.
   Shell window titles automatically become tab titles.
+- Only the active terminal tab keeps a WebGL renderer. Background tabs continue
+  running and parsing PTY output while releasing their GPU renderer.
+- Reopening the panel restores all live terminal tabs. Settings can keep them
+  indefinitely, reclaim them after 30 idle minutes, or end them immediately.
 - OSC 52 lets programs such as Claude Code, tmux, and Vim write to the system
   clipboard.
+- PTYs advertise `xterm-256color` and True Color so Codex, Claude, and Kimi can
+  render their full-color terminal interfaces.
 
-## Browser tools (28)
+## Browser tools (31)
 
-**Inspect and retrieve:** `omeety_get_page_snapshot`,
-`omeety_get_selected_context`, `omeety_capture_visible_tab`,
-`omeety_fetch_with_cookie`, `omeety_get_user_pick`, `omeety_list_tabs`, and
-`omeety_get_console_logs`.
+**Inspect and retrieve:** `omeety_get_context_bundle` (structured element
+context plus cropped image), `omeety_get_page_snapshot` (stable UIDs and
+incremental updates), `omeety_get_selected_context`,
+`omeety_capture_visible_tab`, `omeety_fetch_with_cookie`,
+`omeety_get_user_pick`, `omeety_list_tabs`, `omeety_get_console_logs`, and
+`omeety_get_runtime_metrics`.
 
-**Operate:** `omeety_click`, `omeety_click_text`, `omeety_click_at`,
+**Operate:** `omeety_act_and_verify` (action plus postcondition transaction),
+`omeety_click`, `omeety_click_text`, `omeety_click_at`,
 `omeety_fill`, `omeety_type_text`, `omeety_press_key`, `omeety_select`,
 `omeety_scroll`, `omeety_hover`, `omeety_upload_file`, `omeety_open_tab`,
 `omeety_switch_tab`, `omeety_navigate`, `omeety_reload`, `omeety_go_back`,
@@ -248,6 +258,7 @@ browser input.
 | Codex or Kimi cannot connect to MCP | Confirm the URL is `http://127.0.0.1:49171/mcp` and inspect `~/.codex/config.toml` or `~/.kimi-code/config.toml`. |
 | The shell cannot find Claude, Codex, or Kimi | The host inherits PATH from the browser. Add the CLI directory to the system PATH and restart the browser, or use the full executable path. |
 | A small amount of old output is missing after reopening the panel | The session is still running, but Omeety only replays the most recent 64 KB. Continue typing; applications should persist any complete history they require. |
+| Multiple terminal tabs use too much memory | Reduce Terminal scrollback to 3,000 or 5,000 in Settings. Only the active tab retains a WebGL renderer. |
 | A browser debugging banner appears after `execute_js` | The tool uses CDP to work on strict-CSP pages. This is Chromium's visible notice for the `debugger` permission and does not affect ordinary terminal use. |
 
 ## Uninstall
@@ -280,14 +291,25 @@ _test/        Browser-free mock-native smoke tests
 _pwtest/      Headed Edge regression probes safe for public reproduction
 ```
 
+Run the supported development regression suite from `host`:
+
+```bash
+cd host
+npm test
+```
+
+The suite has a 30-second hard timeout and always cleans up its Host/PTYs; it
+does not need a persistent `launchctl` job. Host diagnostics rotate at
+`20 MB × 3 files total` and omit heartbeat traffic (about 60 MB maximum).
+
 ## Known limitations and security
 
 - **A real terminal has full local user permissions.** The MCP server binds only
   to `127.0.0.1`; dangerous browser actions still require in-page confirmation.
-- An offscreen document attempts to keep the host and PTYs alive after the side
-  panel closes, with only the most recent 64 KB of output buffered. Exiting the
-  browser, reloading the extension, a Native Messaging host crash, or OS
-  reclamation still ends the sessions.
+- The configured side-panel policy controls whether the offscreen document keeps
+  the host and PTYs alive; only the most recent 64 KB of output is buffered.
+  Exiting the browser, reloading the extension, a Native Messaging host crash,
+  or OS reclamation still ends the sessions.
 - Windows ConPTY and macOS Chrome with a zsh PTY have been verified. Linux has
   not yet completed a headed-browser regression pass.
 - Safari is not currently supported. It lacks the Chromium combination of
