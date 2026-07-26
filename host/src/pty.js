@@ -87,13 +87,26 @@ export function resolveShell(choice) {
   return { cmd: WINDOWS_SHELLS.powershell, args: ["-NoLogo"] }
 }
 
-export function startPty({ shell, args, cols, rows, cwd, onOutput, onExit }) {
+// Native Host 会继承启动 Chrome/Edge 的环境。浏览器若由带 NO_COLOR 的自动化终端启动，
+// 这个禁色标志原先会继续泄漏给所有 PTY，导致 Codex 即使运行在 xterm-256color 中也主动
+// 退化成黑白。PTY 是 Omeety 自己创建的终端边界，因此在这里声明真实能力并清除父进程的
+// 偶然禁色标志；用户仍可在 shell 启动文件里显式重新设置 NO_COLOR。
+export function createPtyEnv(baseEnv = process.env) {
   const env = augmentPath({
-    ...process.env,
+    ...baseEnv,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-    LANG: process.env.LANG || "en_US.UTF-8",
+    TERM_PROGRAM: "Omeety",
+    LANG: baseEnv.LANG || "en_US.UTF-8",
   })
+  delete env.NO_COLOR
+  // 不沿用其他终端（例如启动 Chrome 的 Ghostty）的版本号，避免能力探测误判。
+  delete env.TERM_PROGRAM_VERSION
+  return env
+}
+
+export function startPty({ shell, args, cols, rows, cwd, onOutput, onExit }) {
+  const env = createPtyEnv()
   const options = {
     name: "xterm-256color",
     cols: cols || 80,

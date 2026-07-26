@@ -6,6 +6,8 @@ const DEFAULT_SETTINGS = {
   cols: 80,
   rows: 24,
   fontSize: 12, // 终端字号，Ctrl+滚轮/Ctrl+=/Ctrl+- 调整后自动记住
+  scrollback: 5000, // 每个终端 tab 的回滚行数；多 tab 时直接影响内存占用
+  keepAliveMode: "always", // always | 30m | close，侧栏关闭后的 PTY 保活策略
   acknowledged: false, // 安全确认（真终端=整机权限）
 }
 

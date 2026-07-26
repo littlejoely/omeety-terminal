@@ -64,7 +64,7 @@ TARGET_HTML = r"""<!doctype html>
   <div class="hero">Your CLI agent now has<br><span>browser eyes & hands.</span></div>
   <div class="sub">Keep the real local terminal. Give Codex, Claude Code, Kimi Code, or any MCP client the same reliable browser tools.</div>
   <div class="card" id="connection-card"><div><div class="label">Browser bridge</div><div class="state"><i class="dot"></i><span id="status">Waiting for agent</span></div></div><button id="connect-browser">Connect browser</button></div>
-  <div class="tools"><span class="tool">Current tab</span><span class="tool">28 MCP tools</span><span class="tool">Native Messaging</span><span class="tool">ConPTY</span></div>
+  <div class="tools"><span class="tool">Current tab</span><span class="tool">31 MCP tools</span><span class="tool">Native Messaging</span><span class="tool">ConPTY</span></div>
 </main>
 <script>
 document.getElementById('connect-browser').addEventListener('click',()=>{
@@ -151,7 +151,7 @@ def render_social_preview(context, final_frame):
         .chips{{display:flex;gap:9px;margin-top:27px}}.chips i{{font-style:normal;font:600 13px Consolas;padding:8px 11px;border:1px solid #7286aa55;border-radius:9px;background:#101a2b}}
         .shot{{position:absolute;left:620px;top:76px;width:720px;height:492px;border-radius:20px;overflow:hidden;border:1px solid #adc2e344;box-shadow:0 30px 90px #000a;transform:perspective(1200px) rotateY(-5deg)}}
         .shot img{{width:875px;height:492px;object-fit:cover;object-position:right top}}.glow{{position:absolute;inset:auto 0 0;height:2px;background:linear-gradient(90deg,#6ee7c2,#7aa5ff,#c28aff)}}
-        </style><div class='copy'><div class='brand'><img src='data:image/png;base64,{logo}'>Omeety Terminal</div><h1>The browser <span>exoskeleton</span><br>for CLI agents.</h1><p>A real local terminal in Edge/Chrome. One set of browser eyes and hands for Codex, Claude Code, Kimi Code, and any MCP client.</p><div class='chips'><i>Real PTY</i><i>28 MCP tools</i><i>Agent-neutral</i><i>Local-first</i></div></div><div class='shot'><img src='data:image/jpeg;base64,{shot}'></div><div class='glow'></div>""",
+        </style><div class='copy'><div class='brand'><img src='data:image/png;base64,{logo}'>Omeety Terminal</div><h1>The browser <span>exoskeleton</span><br>for CLI agents.</h1><p>A real local terminal in Edge/Chrome. One set of browser eyes and hands for Codex, Claude Code, Kimi Code, and any MCP client.</p><div class='chips'><i>Real PTY</i><i>31 MCP tools</i><i>Agent-neutral</i><i>Local-first</i></div></div><div class='shot'><img src='data:image/jpeg;base64,{shot}'></div><div class='glow'></div>""",
         wait_until="load",
     )
     page.screenshot(path=str(OUTPUT / "social-preview.png"))

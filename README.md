@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#已知限制--安全)
-[![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#支持的浏览器工具28-个agent-自动可用)
+[![MCP tools: 31](https://img.shields.io/badge/MCP_tools-31-5ee7b1?style=flat-square)](#支持的浏览器工具31-个agent-自动可用)
 
 **Omeety Terminal 是 CLI Agent 的浏览器外骨骼：把真实本地终端放进
 Edge/Chrome 侧栏，让 Codex、Claude Code、Kimi Code 以及任何支持 MCP 的
 CLI Agent 共用当前网页的同一双眼睛和手。**
 
 [3 分钟快速开始](#3-分钟快速开始) · [为什么是 Omeety](#为什么是-omeety) ·
-[工作原理](#它怎么工作一张图) · [28 个浏览器工具](#支持的浏览器工具28-个agent-自动可用) ·
+[工作原理](#它怎么工作一张图) · [31 个浏览器工具](#支持的浏览器工具31-个agent-自动可用) ·
 [安全边界](#已知限制--安全) · [参与开发](CONTRIBUTING.md)
 
 ![Omeety 通过真实 MCP 路径读取并操作当前标签页](docs/images/omeety-demo.gif)
 
 > 上面的可复现演示使用确定性的本地 MCP 客户端，实际经过扩展、Native
 > Messaging、ConPTY 和浏览器工具；Codex、Claude Code、Kimi Code 使用同一套
-> 28 个工具。演示不依赖模型账号或预录的模型回答。
+> 31 个工具。演示不依赖模型账号或预录的模型回答。
 
 没有专用聊天模式，也没有模型切换按钮——它就是一个真实 shell。你仍然可以运行
 `git`、`npm`、`claude`、`codex`、`kimi` 或任意本地命令；区别是里面的 Agent
@@ -100,8 +100,9 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 4. 为更多 MCP Agent、浏览器和操作系统增加薄适配层，保持核心工具契约一致。
 5. 把权限组、只读模式、域名边界等做成可选安全层，而不是绑定某个模型的策略。
 
-当前第一优先级是**可靠性**：终端输入输出和浏览器工具必须先做到“结果真实、错误
-可信、页面跳转不中断”。连续选取与 Context Bundle 是下一阶段的重点。
+当前第一优先级仍是**可靠性**：终端输入输出和浏览器工具必须做到“结果真实、错误
+可信、页面跳转不中断”。Context Bundle v1 和动作后验证已经落地；下一阶段会继续
+完善连续选取、跨域 iframe 兜底和更细粒度的网络遥测。
 
 ## 它怎么工作（一张图）
 
@@ -113,8 +114,8 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
                                                          工具调用 → 转发到 content.js（操控当前标签页）
 ```
 
-- 首次打开终端面板时，浏览器拉起 host；之后 offscreen 保活会让 host/PTY 在侧栏关闭后继续运行。
-- 重新打开侧栏会复用原会话并回放有限的近期输出；退出浏览器、重载扩展或 host 异常退出才会结束会话。
+- 首次打开终端面板时，浏览器拉起 host；之后 offscreen 按设置保活 host/PTY（持续保活、空闲 30 分钟或立即结束）。
+- 重新打开侧栏会从 host 获取真实会话清单，恢复全部仍在运行的终端 Tab，并回放有限的近期输出。
 - 一个进程干三件事：终端 I/O 中继、PTY（真 shell）、MCP 服务。
 
 ## ⚠ 前置：必须有一个本地 host
@@ -159,25 +160,28 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 1. 点扩展图标开侧栏 → 首次有"真·终端=整机权限"的确认门，点「我了解」。
 2. 出现系统 Shell 提示符（Windows 为 PowerShell，macOS 为 zsh）。敲 `claude`（或 `codex` / `kimi`）。
 3. 在 agent 里：
-   - `/mcp`（claude）能看到 `omeety_terminal` + 28 个 `omeety_*` 工具已连上。
+   - `/mcp`（claude）能看到 `omeety_terminal` + 31 个 `omeety_*` 工具已连上。
    - 让它"描述当前网页" → 它会读取你**当前 Chrome/Edge 标签页**的内容。
-4. 设置（⚙）：可切换系统默认 Shell、zsh/bash/fish、PowerShell/CMD/Git Bash 或自定义路径。
+4. 设置（⚙）：可切换 Shell、调整每个 Tab 的回滚行数，并配置侧栏关闭后的会话保活策略。
 
 ## 终端快捷键 / 特性
 
 - **Ctrl+F**：终端内搜索输出（Enter 下一个 / Shift+Enter 上一个 / Esc 关闭）。
 - **Ctrl+点击链接**：在浏览器新标签页打开终端里的 URL。
-- **选中即复制**；**Ctrl+V / 右键粘贴**（bracketed paste：多行粘进 claude/PSReadLine 不会逐行提交）。
+- **选中即复制**；**Ctrl+V / Cmd+V / 右键粘贴**（bracketed paste：长内容可由 Codex 折叠，多行粘进 claude/PSReadLine 不会逐行提交）。
 - **Ctrl+滚轮 / Ctrl+= / Ctrl+- / Ctrl+0**：调字号（自动记住，重开不丢）。
 - **Ctrl+Alt+T** 新终端 tab · **Ctrl+Alt+W** 关闭当前 · **Ctrl+Alt+←/→** 切换 tab（Ctrl+T/W/Tab 被浏览器占用，故用 Ctrl+Alt）。
 - tab 栏：点击切换、**中键关闭**、右键重命名；shell 上报的窗口标题（cmd `title`、PS `$Host.UI.RawUI.WindowTitle`）自动变成 tab 标题。
+- 多 Tab 只让当前活动终端占用 WebGL Renderer；后台 Tab 继续运行和接收输出，但释放 GPU 渲染资源，切回时自动恢复。
+- 侧栏重开会恢复全部仍存活的终端 Tab；设置中可选择持续保活、空闲 30 分钟后结束或关闭侧栏立即结束。
 - **OSC52**：shell 里的程序（claude `/copy`、tmux、vim）可直接写系统剪贴板。
+- 终端声明 `xterm-256color` 与 True Color 能力，Codex/Claude/Kimi 可正常显示彩色 TUI。
 
-## 支持的浏览器工具（28 个，agent 自动可用）
+## 支持的浏览器工具（31 个，agent 自动可用）
 
-**查看 / 获取**：`omeety_get_page_snapshot`（元素 uid 跨快照稳定）、`omeety_get_selected_context`、`omeety_capture_visible_tab`（截图，1280 宽自适应下采样）、`omeety_fetch_with_cookie`、`omeety_get_user_pick`（侧栏 📌 选取的元素）、`omeety_list_tabs`、`omeety_get_console_logs`（CDP 收 console/异常）。
+**查看 / 获取**：`omeety_get_context_bundle`（结构化元素上下文 + 局部截图）、`omeety_get_page_snapshot`（稳定 uid + 增量快照）、`omeety_get_selected_context`、`omeety_capture_visible_tab`、`omeety_fetch_with_cookie`、`omeety_get_user_pick`、`omeety_list_tabs`、`omeety_get_console_logs`、`omeety_get_runtime_metrics`。
 
-**操作**：`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`（可跨 reload/导航等待元素或文本）、`omeety_execute_js`（通过 CDP 在严格 CSP 页面执行 JS 的逃生舱）、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
+**操作**：`omeety_act_and_verify`（动作 + 后置条件验证事务）、`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`、`omeety_execute_js`、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
 
 危险操作（提交/保存/删除/同意类点击、非 GET 请求）会自动弹浏览器确认框，需你同意才执行。富文本编辑器（飞书等）合成事件不认时，给 `click_at`/`fill`/`type_text`/`press_key` 传 `cdp:true` 走真实输入。
 
@@ -190,6 +194,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 | codex/kimi 连不上 MCP | 确认配置 URL 是 `http://127.0.0.1:49171/mcp`；检查 `~/.codex/config.toml`、`~/.kimi-code/config.toml` |
 | 终端里找不到 claude/codex/kimi | host 的 PATH 来自浏览器环境；用全路径运行，或把它们的目录加到系统 PATH 后重启浏览器 |
 | 关闭侧栏后再打开，少量旧输出没显示 | 会话仍在运行，但只回放最近 64KB 输出；继续输入即可，完整历史应由终端程序自身保存 |
+| 多终端 Tab 占用偏高 | 在设置中把“终端回滚行数”调为 3,000 或 5,000；Omeety 只为活动 Tab 保留 WebGL Renderer |
 | `execute_js` 后出现浏览器调试提示条 | 该工具为兼容严格 CSP 使用 CDP；这是 Chromium 对 `debugger` 权限的可见提示，不影响普通终端 |
 
 ## 卸载
@@ -219,10 +224,20 @@ _test/        mock-native 冒烟测试（无需浏览器）
 _pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
 ```
 
+开发回归统一从 `host` 目录运行：
+
+```bash
+cd host
+npm test
+```
+
+测试包含 30 秒硬超时和 Host/PTY 退出清理，不需要注册常驻 `launchctl` 任务。Host 调试日志按
+`20MB × 3份` 轮转，并跳过心跳消息，最多约占 60MB。
+
 ## 已知限制 / 安全
 
 - **真终端 = 整机权限**：这是固有特性。host 的 MCP 只 bind `127.0.0.1`（不对外）；危险浏览器操作仍走页面内确认框。
-- 侧栏关闭后 offscreen document 会尽力保活 host/PTY，并只缓存最近 64KB 输出；退出浏览器、重载扩展、native host 崩溃或被系统回收仍会结束会话。
+- 侧栏关闭后是否保活由设置决定，并只缓存最近 64KB 输出；退出浏览器、重载扩展、native host 崩溃或被系统回收仍会结束会话。
 - 已验证 Windows ConPTY 与 macOS Chrome + zsh PTY；Linux 尚未完成浏览器真机回归。
 - Safari 当前不受支持：Safari 没有 Chromium `sidePanel`、`offscreen`、`chrome.debugger/CDP` 的等价组合，并且其 Native Messaging 必须通过包含扩展的 macOS App。Safari 版需要独立容器 App 和浏览器适配层，不能直接加载本目录。
 - Codex 在浏览器侧栏终端中的光标/中文 IME 兼容性跟踪：

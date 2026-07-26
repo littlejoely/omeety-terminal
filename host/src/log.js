@@ -7,7 +7,23 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const LOG_PATH = path.join(__dirname, "..", "host-debug.log")
+const LOG_PATH = process.env.OMEETY_LOG_PATH || path.join(__dirname, "..", "host-debug.log")
+const MAX_LOG_BYTES = Math.max(1024, Number(process.env.OMEETY_LOG_MAX_BYTES) || 20 * 1024 * 1024)
+const LOG_BACKUPS = Math.max(1, Math.min(10, Number(process.env.OMEETY_LOG_BACKUPS) || 2))
+let currentBytes = (() => {
+  try { return fs.statSync(LOG_PATH).size } catch { return 0 }
+})()
+
+function rotateIfNeeded(incomingBytes) {
+  if (currentBytes + incomingBytes <= MAX_LOG_BYTES) return
+  for (let index = LOG_BACKUPS; index >= 1; index -= 1) {
+    const source = index === 1 ? LOG_PATH : `${LOG_PATH}.${index - 1}`
+    const target = `${LOG_PATH}.${index}`
+    try { fs.rmSync(target, { force: true }) } catch { /* ignore */ }
+    try { fs.renameSync(source, target) } catch { /* source may not exist */ }
+  }
+  currentBytes = 0
+}
 
 function ts() {
   const d = new Date()
@@ -31,7 +47,11 @@ export function log(...args) {
       }
       return String(a)
     })
-    fs.appendFileSync(LOG_PATH, `[${ts()}] ${parts.join(" ")}\n`, "utf8")
+    const line = `[${ts()}] ${parts.join(" ")}\n`
+    const bytes = Buffer.byteLength(line, "utf8")
+    rotateIfNeeded(bytes)
+    fs.appendFileSync(LOG_PATH, line, "utf8")
+    currentBytes += bytes
   } catch {
     /* 日志本身绝不能影响 host 运行 */
   }

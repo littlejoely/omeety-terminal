@@ -4,6 +4,45 @@ All notable public changes to Omeety Terminal are recorded here.
 
 Omeety Terminal 的重要公开变更记录在此处。
 
+## [0.1.2] - 2026-07-26
+
+Browser intelligence, terminal session, and resource lifecycle / 浏览器智能、终端会话与资源生命周期优化。
+
+### Added / 新增
+
+- Add Context Bundle v1 with target semantics, nearby controls, iframe/Shadow
+  DOM context, diagnostics, and a cropped screenshot returned as MCP image content.
+- Add `omeety_act_and_verify` for action + navigation-resilient postcondition transactions.
+- Add incremental light snapshots and `omeety_get_runtime_metrics` latency/reliability reporting.
+- Restore every live terminal tab from the Native Host after reopening the side panel.
+- Add configurable per-tab scrollback: 3,000 / 5,000 / 10,000 / 20,000 lines.
+- Add side-panel close policies: keep indefinitely, reclaim after 30 idle
+  minutes, or end immediately.
+- Add a supported `npm test` entry with a 30-second hard timeout and guaranteed
+  Host/PTY cleanup.
+
+### Changed / 优化
+
+- Keep WebGL only on the active terminal tab; inactive tabs continue running
+  while releasing their GPU renderer.
+- Change the default per-tab scrollback from 10,000 to 5,000 lines.
+- Rotate Host diagnostics as three capped 20 MB files and omit heartbeat and
+  high-frequency dynamic-title metadata traffic.
+- Reconnect the offscreen keepalive port after every service-worker restart,
+  including repeated disconnects.
+- Traverse open Shadow DOM and same-origin iframes when collecting visible text,
+  controls, UIDs, and compound wait conditions.
+
+### Fixed / 修复
+
+- Prevent hidden PTYs from becoming unreachable after a multi-tab side panel is closed and reopened.
+- Clean up PTYs on Host signals and test interruption/timeout.
+- Avoid treating shutdown of an already-exited tab as a request to terminate the entire Host.
+- Deliver Cmd+V, Ctrl+V, Shift+Insert, and right-click through xterm's canonical
+  paste path so Codex can collapse long pasted content instead of rendering it inline.
+- Prevent a browser-launcher `NO_COLOR` value from leaking into PTYs; advertise
+  xterm-256color/truecolor and Omeety as the terminal so Codex keeps its color UI.
+
 ## [0.1.1] - 2026-07-26
 
 macOS Chrome support / macOS Chrome 支持。
@@ -76,3 +115,4 @@ First public beta / 首个公开测试版。
 
 [0.1.1]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.0
+[0.1.2]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.2

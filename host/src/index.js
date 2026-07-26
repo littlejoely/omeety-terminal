@@ -9,8 +9,41 @@ import { log } from "./log.js"
 
 const MCP_PORT = Number(process.env.OMEETY_MCP_PORT) || 49171
 const ptys = new Map() // sid(会话 id) -> ptyApi。多终端 tab：每个 tab 一个独立 PTY。
+const sessionMeta = new Map() // sid -> 可恢复的 tab 元数据（标题、shell、兼容开关、创建时间）
 let lastMsgAt = Date.now() // 最近一次收到 native 消息的时间；心跳保活的判据
 const sidOf = (msg) => (msg && msg.sid) || "default" // 无 sid 走默认会话（兼容旧的单 tab 行为）
+let panelOpen = true // host 由首次打开侧栏触发，后续由 panel_state 精确更新
+let panelDetachedAt = 0
+let keepAliveMode = "always"
+let cleaningUp = false
+
+function normalizeKeepAliveMode(value) {
+  return ["always", "30m", "close"].includes(value) ? value : "always"
+}
+
+function updateSessionMeta(sid, patch = {}) {
+  const current = sessionMeta.get(sid) || {
+    sid,
+    title: `终端 ${sessionMeta.size + 1}`,
+    shell: "auto",
+    renamed: false,
+    punctCompat: false,
+    createdAt: Date.now(),
+  }
+  const next = {
+    ...current,
+    ...(typeof patch.shell === "string" && patch.shell ? { shell: patch.shell } : {}),
+    ...(typeof patch.title === "string" && patch.title.trim() ? { title: patch.title.trim().slice(0, 80) } : {}),
+    ...(typeof patch.renamed === "boolean" ? { renamed: patch.renamed } : {}),
+    ...(typeof patch.punctCompat === "boolean" ? { punctCompat: patch.punctCompat } : {}),
+  }
+  sessionMeta.set(sid, next)
+  return next
+}
+
+function listSessions() {
+  return [...ptys.keys()].map((sid) => ({ ...updateSessionMeta(sid), sid }))
+}
 
 // 兜底：native messaging 是黑盒，任何未捕获异常都要落盘，否则看不到崩溃栈。
 process.on("uncaughtException", (e) => {
@@ -20,7 +53,7 @@ process.on("uncaughtException", (e) => {
   } catch {
     /* stdout 可能也坏了 */
   }
-  process.exit(1)
+  cleanup(1)
 })
 process.on("unhandledRejection", (e) => {
   log("UNHANDLED REJECTION", e?.stack || String(e))
@@ -43,20 +76,45 @@ setInterval(() => {
   if (Date.now() - lastMsgAt > 25000) {
     log("silence watchdog: 25s 无 native 消息，判定连接已断，退出")
     cleanup(0)
+    return
+  }
+  if (!panelOpen && keepAliveMode === "30m" && panelDetachedAt && Date.now() - panelDetachedAt >= 30 * 60 * 1000) {
+    log("session idle watchdog: 侧栏关闭超过 30 分钟，结束保活会话")
+    cleanup(0)
   }
 }, 5000)
 
 startNmReader((msg) => {
   lastMsgAt = Date.now()
-  log("nm in", msg?.type, msg?.shell ? "shell=" + msg.shell : "", msg?.cols ?? "", msg?.rows ?? "")
+  // ping and dynamic terminal-title metadata are high-frequency bookkeeping.
+  // Logging either one creates needless disk writes while a CLI spinner is
+  // updating the window title; state changes remain visible in explicit logs.
+  if (msg?.type !== "ping" && msg?.type !== "session_meta") {
+    log("nm in", msg?.type, msg?.shell ? "shell=" + msg.shell : "", msg?.cols ?? "", msg?.rows ?? "")
+  }
   switch (msg?.type) {
     case "hello": {
       // 扩展连上后第一条：带 sid + shell + 尺寸。据此 spawn 该 tab 的 PTY（已存在则只 resize）。
       const sid = sidOf(msg)
+      updateSessionMeta(sid, msg)
       let ready = true
       if (!ptys.has(sid)) ready = spawnShell(sid, msg.shell, msg.cols, msg.rows)
       else if (msg.cols && msg.rows) ptys.get(sid).resize(msg.cols, msg.rows)
       if (ready) nmSend({ type: "status", state: "ready", sid })
+      break
+    }
+    case "list_sessions":
+      nmSend({ type: "sessions_list", sessions: listSessions() })
+      break
+    case "session_meta":
+      if (ptys.has(sidOf(msg))) updateSessionMeta(sidOf(msg), msg)
+      break
+    case "panel_state": {
+      keepAliveMode = normalizeKeepAliveMode(msg.keepAliveMode)
+      panelOpen = !!msg.open
+      panelDetachedAt = panelOpen ? 0 : Date.now()
+      log("panel state", panelOpen ? "open" : "closed", "keepAlive=" + keepAliveMode)
+      if (!panelOpen && keepAliveMode === "close") cleanup(0)
       break
     }
     case "input":
@@ -87,20 +145,24 @@ startNmReader((msg) => {
         }
       }
       if (spawnShell(sid, msg.shell, msg.cols, msg.rows)) {
+        updateSessionMeta(sid, { ...msg, shell: msg.shell })
         nmSend({ type: "status", state: "ready", sid })
       }
       break
     }
     case "shutdown": {
       const sid = msg && msg.sid
-      if (sid && ptys.has(sid)) {
-        // 关单个 tab：杀该 PTY
-        try {
-          ptys.get(sid).kill()
-        } catch {
-          /* ignore */
+      if (sid) {
+        if (ptys.has(sid)) {
+          // 关单个 tab：杀该 PTY
+          try {
+            ptys.get(sid).kill()
+          } catch {
+            /* ignore */
+          }
+          ptys.delete(sid)
         }
-        ptys.delete(sid)
+        sessionMeta.delete(sid)
       } else {
         cleanup(0) // 无 sid = 整体退出（面板全关）
       }
@@ -110,6 +172,8 @@ startNmReader((msg) => {
 })
 
 function cleanup(code) {
+  if (cleaningUp) return
+  cleaningUp = true
   log("cleanup", code)
   for (const [, pty] of ptys) {
     try {
@@ -119,6 +183,7 @@ function cleanup(code) {
     }
   }
   ptys.clear()
+  sessionMeta.clear()
   process.exit(code)
 }
 
@@ -142,10 +207,12 @@ function spawnShell(sid, shellChoice, cols, rows) {
         }
         log("pty exit sid=" + sid, code)
         ptys.delete(sid)
+        sessionMeta.delete(sid)
         nmSend({ type: "status", state: "pty_exit", sid, msg: String(code) })
       },
     })
     ptys.set(sid, ptyApi)
+    updateSessionMeta(sid, { shell: shellChoice || "auto" })
     log("spawnShell OK sid=" + sid)
     return true
   } catch (e) {
@@ -168,3 +235,10 @@ process.stdin.on("error", (e) => {
   log("stdin ERROR", e?.message || String(e))
   cleanup(0)
 })
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    log("signal", signal)
+    cleanup(0)
+  })
+}

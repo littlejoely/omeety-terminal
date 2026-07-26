@@ -11,6 +11,8 @@ const tabsEl = $("tabs")
 const ackGate = $("ackGate")
 const shellSelect = $("shellSelect")
 const shellCustom = $("shellCustom")
+const scrollbackSelect = $("scrollbackSelect")
+const keepAliveSelect = $("keepAliveSelect")
 
 let panelPort = null
 let curSettings = null
@@ -18,6 +20,9 @@ const tabs = new Map() // sid -> { term, hostEl, title }
 let activeSid = null
 let tabSeq = 0
 const closingSids = new Set() // 主动关闭的 tab（点 ×）：忽略 host 回的 pty_exit 提示
+let sessionsResolved = false
+let sessionsFallbackTimer = null
+const sessionMetaTimers = new Map()
 
 function setStatus(state, text) {
   statusDot.className = "dot " + (state || "")
@@ -62,20 +67,52 @@ function persistFontSize(fs) {
   fontSizeSaveTimer = setTimeout(() => saveSettings({ fontSize: fs }), 500)
 }
 
-function newTab(shell) {
-  const sid = String(++tabSeq)
+function makeSid() {
+  return `t-${Date.now().toString(36)}-${++tabSeq}`
+}
+
+function persistTabMeta(sid) {
+  const t = tabs.get(sid)
+  if (!t) return
+  send({ type: "session_meta", sid, title: t.title, renamed: t.renamed, punctCompat: t.punctCompat })
+}
+
+function scheduleTabMeta(sid) {
+  clearTimeout(sessionMetaTimers.get(sid))
+  sessionMetaTimers.set(sid, setTimeout(() => {
+    sessionMetaTimers.delete(sid)
+    persistTabMeta(sid)
+  }, 500))
+}
+
+function createTab(session = {}) {
+  const sid = String(session.sid || makeSid())
+  if (tabs.has(sid)) return sid
   const hostEl = document.createElement("div")
   // 先把现有 tab 取消激活，新 tab 直接 active——让 initTerminal 里 term.open 时容器已有真实尺寸，
   // 否则在 display:none 的 0 尺寸容器里 open，xterm 的选区/鼠标坐标会失效（表现为复制选不中）。
-  for (const [, t] of tabs) t.hostEl.classList.remove("active")
+  for (const [, t] of tabs) {
+    t.hostEl.classList.remove("active")
+    t.term?.setActive?.(false)
+  }
   hostEl.className = "terminal-tab active"
   terminalHost.appendChild(hostEl)
   activeSid = sid
   const wrapSend = (m) => send({ ...m, sid })
+  const rec = {
+    term: null,
+    hostEl,
+    title: String(session.title || `终端 ${tabs.size + 1}`).slice(0, 80),
+    renamed: !!session.renamed,
+    punctCompat: !!session.punctCompat,
+    shell: session.shell || resolvedShell(),
+  }
+  tabs.set(sid, rec)
   const term = initTerminal({
     hostEl,
     send: wrapSend,
     fontSize: curSettings.fontSize,
+    scrollback: curSettings.scrollback,
     onFontSizeChange: persistFontSize,
     // shell 经 OSC 0/2 上报的窗口标题（cmd title / PS $Host.UI.RawUI.WindowTitle / bash PROMPT_COMMAND）
     // → 像 Windows Terminal 一样自动更新 tab 标题；用户手动重命名过的 tab 不覆盖。
@@ -84,11 +121,23 @@ function newTab(shell) {
       if (rec && !rec.renamed && rec.title !== t) {
         rec.title = t
         renderTabs()
+        scheduleTabMeta(sid)
       }
     },
   })
-  tabs.set(sid, { term, hostEl, title: "终端 " + sid, renamed: false, punctCompat: false })
-  send({ type: "hello", sid, shell: shell || resolvedShell(), cols: curSettings.cols, rows: curSettings.rows })
+  rec.term = term
+  term.setPunctCompat?.(rec.punctCompat)
+  term.setActive?.(true)
+  send({
+    type: "hello",
+    sid,
+    shell: rec.shell,
+    title: rec.title,
+    renamed: rec.renamed,
+    punctCompat: rec.punctCompat,
+    cols: curSettings.cols,
+    rows: curSettings.rows,
+  })
   // 面板重开场景：host/PTY 还活着但 xterm 是新的 → 要最近输出回放，避免一片空白
   send({ type: "replay_request", sid })
   requestAnimationFrame(() => {
@@ -99,10 +148,18 @@ function newTab(shell) {
   return sid
 }
 
+function newTab(shell) {
+  return createTab({ shell: shell || resolvedShell() })
+}
+
 function setActive(sid) {
   if (!tabs.has(sid)) return
   activeSid = sid
-  for (const [s, t] of tabs) t.hostEl.classList.toggle("active", s === sid)
+  for (const [s, t] of tabs) {
+    const active = s === sid
+    t.hostEl.classList.toggle("active", active)
+    t.term?.setActive?.(active)
+  }
   const t = tabs.get(sid)
   requestAnimationFrame(() => {
     t.term?.resize()
@@ -114,6 +171,8 @@ function setActive(sid) {
 function closeTab(sid) {
   const t = tabs.get(sid)
   if (!t) return
+  clearTimeout(sessionMetaTimers.get(sid))
+  sessionMetaTimers.delete(sid)
   closingSids.add(sid) // 标记主动关闭：host 回 pty_exit 时不弹提示
   send({ type: "shutdown", sid }) // 让 host 杀掉这个 PTY
   try {
@@ -148,7 +207,12 @@ function openTabMenu(x, y, sid) {
   rn.onclick = () => {
     closeTabMenu()
     const name = window.prompt("重命名终端：", t.title)
-    if (name && name.trim()) { t.title = name.trim().slice(0, 30); t.renamed = true; renderTabs() }
+    if (name && name.trim()) {
+      t.title = name.trim().slice(0, 30)
+      t.renamed = true
+      renderTabs()
+      persistTabMeta(sid)
+    }
   }
   const pc = document.createElement("button")
   pc.className = "ctx-toggle" + (t.punctCompat ? " on" : "")
@@ -157,6 +221,7 @@ function openTabMenu(x, y, sid) {
   pc.onclick = () => {
     t.punctCompat = !t.punctCompat
     t.term?.setPunctCompat?.(t.punctCompat)
+    persistTabMeta(sid)
     setStatus("ok", t.punctCompat ? `「${t.title}」已开启 codex 标点兼容` : `「${t.title}」已关闭标点兼容`)
     closeTabMenu()
   }
@@ -213,6 +278,18 @@ function renderTabs() {
   if (activeEl) activeEl.scrollIntoView({ block: "nearest", inline: "nearest" })
 }
 
+function restoreSessions(sessions) {
+  clearTimeout(sessionsFallbackTimer)
+  sessionsFallbackTimer = null
+  sessionsResolved = true
+  const live = Array.isArray(sessions) ? sessions.filter((s) => s && s.sid) : []
+  for (const session of live) {
+    if (!tabs.has(String(session.sid))) createTab(session)
+  }
+  if (tabs.size === 0) newTab()
+  else setStatus("ok", live.length > 1 ? `已恢复 ${live.length} 个终端会话` : "已连接")
+}
+
 // ---------- native 桥 ----------
 function connectPanel() {
   if (panelPort) {
@@ -224,7 +301,9 @@ function connectPanel() {
   }
   panelPort = chrome.runtime.connect({ name: "panel" })
   panelPort.onMessage.addListener((msg) => {
-    if (msg?.type === "output") {
+    if (msg?.type === "sessions_list") {
+      restoreSessions(msg.sessions)
+    } else if (msg?.type === "output") {
       // 按 sid 路由到对应 tab 的终端（host 给每条 output 都打了 sid）
       tabs.get(msg.sid || "default")?.term?.write(msg.data)
     } else if (msg?.type === "status") {
@@ -237,6 +316,21 @@ function connectPanel() {
         if (sid === activeSid) tabs.get(sid)?.term?.focus()
       } else if (msg.state === "disconnected") {
         setStatus("err", msg.msg ? `已断开：${msg.msg}` : "已断开，重连中…")
+        // background 会在 1.5s 后重建 Native Host；随后用现有 tab 元数据重建 PTY。
+        setTimeout(() => {
+          for (const [existingSid, existing] of tabs) {
+            send({
+              type: "hello",
+              sid: existingSid,
+              shell: existing.shell || resolvedShell(),
+              title: existing.title,
+              renamed: existing.renamed,
+              punctCompat: existing.punctCompat,
+              cols: curSettings.cols,
+              rows: curSettings.rows,
+            })
+          }
+        }, 1800)
       } else if (msg.state === "pty_exit") {
         if (sid && closingSids.has(sid)) {
           closingSids.delete(sid) // 主动关闭的 tab：不弹提示
@@ -267,19 +361,22 @@ function connectPanel() {
   })
   panelPort.onDisconnect.addListener(() => setStatus("err", "与后台连接断开"))
 
-  // 首次：建第一个 tab；面板重开：重新 hello 已有 tab。
-  if (tabs.size === 0) {
-    newTab()
-  } else {
-    for (const sid of tabs.keys()) {
-      send({ type: "hello", sid, shell: resolvedShell(), cols: curSettings.cols, rows: curSettings.rows })
+  // Host 是仍存活 PTY 的事实来源：先恢复全部会话；连接异常时 2.5s 后至少给用户一个新终端。
+  send({ type: "list_sessions" })
+  clearTimeout(sessionsFallbackTimer)
+  sessionsFallbackTimer = setTimeout(() => {
+    if (!sessionsResolved && tabs.size === 0) {
+      sessionsResolved = true
+      newTab()
+      setStatus("err", "会话清单响应超时，已创建新终端")
     }
-  }
+  }, 2500)
 }
 
 function restartTerminals(shell) {
   setStatus("", "正在重连…")
-  for (const sid of tabs.keys()) {
+  for (const [sid, tab] of tabs) {
+    tab.shell = shell
     send({ type: "restart", sid, shell, cols: curSettings.cols, rows: curSettings.rows })
   }
 }
@@ -295,6 +392,8 @@ function applyAckGate() {
   const isMac = /Mac/.test(navigator.platform)
   const knownShells = new Set(["auto", "zsh", "bash", "fish", "powershell", "cmd", "pwsh", "gitbash"])
   shellSelect.value = knownShells.has(curSettings.shell) ? curSettings.shell : "custom"
+  scrollbackSelect.value = [3000, 5000, 10000, 20000].includes(Number(curSettings.scrollback)) ? String(curSettings.scrollback) : "5000"
+  keepAliveSelect.value = ["always", "30m", "close"].includes(curSettings.keepAliveMode) ? curSettings.keepAliveMode : "always"
   document.querySelectorAll("#shellSelect option[data-platform]").forEach((option) => {
     option.hidden = isMac ? option.dataset.platform === "windows" : option.dataset.platform === "unix"
   })
@@ -369,12 +468,18 @@ shellSelect.addEventListener("change", () => {
 
 $("saveBtn").addEventListener("click", async () => {
   const shell = resolvedShell() || "auto"
+  const scrollback = Number(scrollbackSelect.value) || 5000
+  const keepAliveMode = keepAliveSelect.value
+  const previousShell = curSettings.shell
   const button = $("saveBtn")
   button.disabled = true
   try {
-    curSettings = await saveSettings({ shell })
+    curSettings = await saveSettings({ shell, scrollback, keepAliveMode })
+    for (const [, tab] of tabs) tab.term?.setScrollback?.(scrollback)
+    send({ type: "settings_changed" })
     setSettingsOpen(false)
-    restartTerminals(shell)
+    if (previousShell !== shell) restartTerminals(shell)
+    else setStatus("ok", "设置已保存")
   } catch (error) {
     setStatus("err", `保存失败：${error?.message || error}`)
   } finally {
@@ -384,9 +489,10 @@ $("saveBtn").addEventListener("click", async () => {
 
 // 工具按类别分组渲染（结构化，便于查看）。name 不在下列表里的归"其他"。
 const TOOL_CATEGORIES = [
-  { title: "页面快照 / 读取", names: ["omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_pick", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
-  { title: "元素操作（点击 / 输入 / 按键）", names: ["omeety_click", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select", "omeety_hover", "omeety_scroll"] },
+  { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_pick", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
+  { title: "动作事务 / 元素操作", names: ["omeety_act_and_verify", "omeety_click", "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select", "omeety_hover", "omeety_scroll"] },
   { title: "等待", names: ["omeety_wait_for"] },
+  { title: "性能 / 诊断", names: ["omeety_get_runtime_metrics"] },
   { title: "预览修改（可回滚）", names: ["omeety_apply_preview_patch", "omeety_rollback_preview_patch"] },
   { title: "标签页 / 导航", names: ["omeety_list_tabs", "omeety_close_tab", "omeety_open_tab", "omeety_switch_tab", "omeety_navigate", "omeety_reload", "omeety_go_back"] },
   { title: "高级（任意 JS / 文件上传）", names: ["omeety_execute_js", "omeety_upload_file"] },

@@ -3,12 +3,50 @@
 //       ③ 在面板与 native 间转发 input/output/resize/status。
 
 import { buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
+import { loadSettings } from "./storage.js"
 
 const NM_NAME = "com.omeety.terminal"
 
 let nativePort = null
 const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel"}) 连进来
 let lastPick = null // 用户用 📌 选取的元素（content.js 回传），供 omeety_get_user_pick 工具取
+const runtimeStartedAt = Date.now()
+const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
+
+function recordToolMetric(name, ok, durationMs) {
+  const current = toolMetrics.get(name) || { calls: 0, successes: 0, failures: 0, totalMs: 0, maxMs: 0, lastMs: 0, lastAt: null }
+  current.calls += 1
+  if (ok) current.successes += 1
+  else current.failures += 1
+  current.totalMs += durationMs
+  current.maxMs = Math.max(current.maxMs, durationMs)
+  current.lastMs = durationMs
+  current.lastAt = new Date().toISOString()
+  toolMetrics.set(name, current)
+}
+
+function getRuntimeMetrics() {
+  const tools = [...toolMetrics.entries()].map(([name, metric]) => ({
+    name,
+    ...metric,
+    averageMs: metric.calls ? Math.round((metric.totalMs / metric.calls) * 10) / 10 : 0,
+  }))
+  return {
+    startedAt: new Date(runtimeStartedAt).toISOString(),
+    uptimeMs: Date.now() - runtimeStartedAt,
+    nativeConnected: !!nativePort,
+    panelConnections: panelPorts.size,
+    replayBufferBytes: outputBufLen,
+    replayBufferChunks: outputBuf.length,
+    cdpAttachedTabs: cdpAttachedTabs.size,
+    totals: {
+      calls: tools.reduce((sum, item) => sum + item.calls, 0),
+      successes: tools.reduce((sum, item) => sum + item.successes, 0),
+      failures: tools.reduce((sum, item) => sum + item.failures, 0),
+    },
+    tools: tools.sort((a, b) => b.calls - a.calls || b.maxMs - a.maxMs),
+  }
+}
 
 // 最近 PTY 输出的环形缓冲（按 sid 分条记录）：面板重开建好 tab 后主动 replay_request 回放，
 // 避免终端一片空白（轻量，仅近 64KB）。注意不能直接无 sid 回放——面板按 sid 路由，对不上会整条丢弃。
@@ -86,6 +124,13 @@ function sendNative(msg) {
   }
 }
 
+async function notifyPanelState(open) {
+  const settings = await loadSettings()
+  const actualOpen = panelPorts.size > 0
+  if (actualOpen !== !!open) return // storage 异步读取期间侧栏状态又变了，丢弃过期通知
+  sendNative({ type: "panel_state", open: actualOpen, keepAliveMode: settings.keepAliveMode })
+}
+
 // 心跳保活：只要 native 连着就每 8s 给 host 发 ping（面板关了也发——offscreen 让 SW 活着，
 // 心跳让 host 的静默看门狗不触发，PTY 因此活过侧栏关闭）。
 setInterval(() => {
@@ -116,8 +161,10 @@ chrome.runtime.onConnect.addListener((port) => {
   // 不在此处主动回放：面板此时还没建 tab，回放会路由不到任何终端被丢弃。
   // 面板建好 tab 后会发 replay_request（见下）。
   port.onMessage.addListener(async (m) => {
-    if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "restart" || m?.type === "shutdown" || m?.type === "list_tools") {
+    if (m?.type === "hello" || m?.type === "input" || m?.type === "resize" || m?.type === "restart" || m?.type === "shutdown" || m?.type === "list_tools" || m?.type === "list_sessions" || m?.type === "session_meta") {
       sendNative(m)
+    } else if (m?.type === "settings_changed") {
+      void notifyPanelState(panelPorts.size > 0)
     } else if (m?.type === "replay_request") {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，
       // 否则会把别的 tab 的终端输出灌进当前 tab（跨 tab 串话）。
@@ -146,9 +193,11 @@ chrome.runtime.onConnect.addListener((port) => {
   })
   port.onDisconnect.addListener(() => {
     panelPorts.delete(port)
-    // 不再因面板全关而断开 native：offscreen 保活下要让 host/PTY 继续活着，供下次重开复用
+    // 由用户设置决定永久保活、空闲 30 分钟回收，或立即结束。
+    if (panelPorts.size === 0) void notifyPanelState(false)
   })
   connectNative()
+  void notifyPanelState(true)
 })
 
 // ---------- CDP（chrome.debugger）真实输入 ----------
@@ -299,6 +348,20 @@ async function cdpResolvePoint(tabId, args) {
   if (Number.isFinite(Number(args.x)) && Number.isFinite(Number(args.y))) {
     return { x: Number(args.x), y: Number(args.y) }
   }
+  if (args.uid || args.selector) {
+    const state = await sendToContent(tabId, "omeety_get_verification_state", {
+      uid: args.uid,
+      selector: args.selector,
+    }).catch(() => null)
+    const bbox = state?.result?.target?.bbox
+    if (bbox && Number.isFinite(bbox.x) && Number.isFinite(bbox.y)) {
+      return {
+        x: bbox.x + bbox.w / 2,
+        y: bbox.y + bbox.h / 2,
+        label: state.result.target.accessibleName || state.result.target.text || "",
+      }
+    }
+  }
   let expr = null
   if (args.uid && args.uid !== "pick") {
     expr = `(()=>{const el=document.querySelector('[data-omeety-uid=${JSON.stringify(String(args.uid))}]');if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`
@@ -327,10 +390,11 @@ async function execCdpTool(tabId, name, args) {
   const isPress = name === "omeety_press_key" && args.cdp
 
   if (isClick) {
-    const cx = Number(args.x), cy = Number(args.y)
-    if (!Number.isFinite(cx) || !Number.isFinite(cy)) throw new Error("click_at(cdp) 需要数值 x,y")
+    const point = await cdpResolvePoint(tabId, args)
+    const cx = Number(point?.x), cy = Number(point?.y)
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) throw new Error("click_at(cdp) 需要可解析的 uid/selector 或数值 x,y")
     if (!args.confirmed) {
-      const label = await cdpGetLabelAt(tabId, cx, cy).catch(() => "")
+      const label = point?.label || await cdpGetLabelAt(tabId, cx, cy).catch(() => "")
       if (label && DANGEROUS_RE.test(label)) {
         throw new Error(`坐标(${cx},${cy})命中危险元素"${label.slice(0, 40)}"——需 confirmed:true 才执行（或先用 omeety_request_user_confirmation 让用户确认）`)
       }
@@ -390,10 +454,19 @@ async function handleToolCall({ id, name, args }) {
   // 注意：tab 必须声明在 try 外——之前 const 在 try 块内，catch 里引用直接 ReferenceError，
   // 导致任何失败的工具调用连 tool_result 都发不出去，agent 端只能干等 60s 超时。
   let tab = null
+  const toolStarted = performance.now()
   try {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null
     let r
-    if (name === "omeety_capture_visible_tab") {
+    if (name === "omeety_get_context_bundle") {
+      if (!tab?.id) throw new Error("没有活动标签页")
+      r = await buildContextBundle(tab.id, args)
+    } else if (name === "omeety_act_and_verify") {
+      if (!tab?.id) throw new Error("没有活动标签页")
+      r = await actAndVerify(tab.id, args)
+    } else if (name === "omeety_get_runtime_metrics") {
+      r = { ok: true, result: getRuntimeMetrics() }
+    } else if (name === "omeety_capture_visible_tab") {
       r = await captureDownscaled(tab?.id)
     } else if (name === "omeety_get_user_pick") {
       // 只返回"当前活动 tab"的 pick——否则切到别的 tab 后会拿到旧 tab 的元素，click/fill(uid:'pick') 作用到错页面。
@@ -490,6 +563,7 @@ async function handleToolCall({ id, name, args }) {
     } else {
       r = await sendToContent(tab?.id, name, args)
     }
+    recordToolMetric(name, !!r?.ok, Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: !!r?.ok, result: r?.result, error: r?.error })
   } catch (e) {
     // CDP 状态自愈：若错误是 debugger 脱钩（tab 崩溃/用户手动取消调试/SW 重启后状态脏），
@@ -499,6 +573,7 @@ async function handleToolCall({ id, name, args }) {
       cdpAttachedTabs.delete(tab.id)
       cdpEnabledDomains.delete(tab.id)
     }
+    recordToolMetric(name, false, Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: false, error: m })
   }
 }
@@ -657,6 +732,131 @@ async function setFileInputByQuery(tabId, filePath) {
   await chromeDebuggerSendCommand({ tabId }, "DOM.setFileInputFiles", { files: [filePath], objectId })
 }
 
+async function buildContextBundle(tabId, args = {}) {
+  const started = performance.now()
+  const content = await sendToContent(tabId, "omeety_get_context_bundle", args)
+  if (!content.ok) return content
+  const bundle = content.result
+  if (args.includeScreenshot !== false && bundle?.screenshotRequest?.bbox) {
+    const screenshot = await captureDownscaled(tabId, {
+      maxWidth: Math.min(Math.max(Number(args.screenshotMaxWidth) || 900, 320), 1280),
+      crop: {
+        bbox: bundle.screenshotRequest.bbox,
+        padding: bundle.screenshotRequest.padding,
+        viewport: bundle.page?.viewport,
+      },
+    })
+    if (screenshot.ok) bundle.screenshot = screenshot.result
+    else bundle.screenshot = { error: screenshot.error }
+  }
+  delete bundle.screenshotRequest
+
+  let logs = consoleLogs.get(tabId) || []
+  let attachedForBundle = false
+  if (args.attachDebugger) {
+    const diagnostics = await getConsoleLogs(tabId, { limit: Number(args.consoleLimit) || 30 })
+    logs = diagnostics.result?.logs || []
+    attachedForBundle = true
+  }
+  const consoleLimit = Math.min(Math.max(Number(args.consoleLimit) || 20, 1), 100)
+  bundle.diagnostics = {
+    consoleAttached: cdpAttachedTabs.has(tabId),
+    attachedForBundle,
+    console: logs
+      .filter((entry) => args.includeAllConsole || ["error", "warning", "warn", "exception"].includes(String(entry.level).toLowerCase()))
+      .slice(-consoleLimit),
+  }
+  bundle.metrics = {
+    ...(bundle.metrics || {}),
+    totalMs: Math.round((performance.now() - started) * 10) / 10,
+  }
+  return { ok: true, result: bundle }
+}
+
+async function actAndVerify(tabId, args = {}) {
+  const started = performance.now()
+  const action = String(args.action || "")
+  const target = {
+    ...(args.uid ? { uid: String(args.uid) } : {}),
+    ...(args.selector ? { selector: String(args.selector) } : {}),
+    ...(Number.isFinite(Number(args.x)) ? { x: Number(args.x) } : {}),
+    ...(Number.isFinite(Number(args.y)) ? { y: Number(args.y) } : {}),
+  }
+  const before = await sendToContent(tabId, "omeety_get_verification_state", target)
+  const actionArgs = {
+    ...target,
+    ...(args.confirmed ? { confirmed: true } : {}),
+    ...(args.backgroundTask ? { backgroundTask: true } : {}),
+    ...(args.cdp ? { cdp: true } : {}),
+  }
+  let toolName
+  if (action === "click") {
+    toolName = args.cdp || ("x" in target && "y" in target) ? "omeety_click_at" : "omeety_click"
+  } else if (action === "click_text") {
+    toolName = "omeety_click_text"
+    actionArgs.text = String(args.text || "")
+    actionArgs.exact = !!args.exact
+  } else if (action === "fill") {
+    toolName = "omeety_fill"
+    actionArgs.value = String(args.value ?? "")
+  } else if (action === "type") {
+    toolName = "omeety_type_text"
+    actionArgs.text = String(args.text ?? "")
+    actionArgs.clear = args.clear !== false
+  } else if (action === "press") {
+    toolName = "omeety_press_key"
+    actionArgs.key = String(args.key || "")
+  } else if (action === "select") {
+    toolName = "omeety_select"
+    actionArgs.value = String(args.value ?? "")
+  } else {
+    return { ok: false, error: "act_and_verify.action 需要 click/click_text/fill/type/press/select" }
+  }
+
+  let acted
+  if (isCdpTool(toolName, actionArgs)) acted = await runSerial(tabId, () => execCdpTool(tabId, toolName, actionArgs))
+  else acted = await sendToContent(tabId, toolName, actionArgs)
+  if (!acted.ok) return acted
+
+  const expectation = { ...(args.expect || {}) }
+  if (action === "fill" || action === "select") expectation.valueEquals ??= String(args.value ?? "")
+  if (action === "type") {
+    if (args.clear !== false) expectation.valueEquals ??= String(args.text ?? "")
+    else expectation.valueIncludes ??= String(args.text ?? "")
+  }
+  if (target.uid) expectation.targetUid ??= target.uid
+  if (target.selector) expectation.targetSelector ??= target.selector
+  expectation.match = expectation.match === "any" ? "any" : "all"
+  expectation.timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? expectation.timeoutMs ?? 8000), 500), 60000)
+  const conditionKeys = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
+  const hasExpectation = conditionKeys.some((key) => expectation[key] !== undefined)
+
+  let waited = null
+  if (hasExpectation) waited = await waitForAcrossNavigation(tabId, expectation)
+  else await waitDelay(Math.min(Math.max(Number(args.settleMs) || 250, 50), 2000))
+  const after = await sendToContent(tabId, "omeety_get_verification_state", target)
+  const beforeState = before.ok ? before.result : null
+  const afterState = after.ok ? after.result : null
+  const comparable = (state) => state ? { url: state.url, title: state.title, textDigest: state.textDigest, target: state.target } : null
+  const stateChanged = JSON.stringify(comparable(beforeState)) !== JSON.stringify(comparable(afterState))
+  const verified = hasExpectation ? Boolean(waited?.ok && waited.result?.found && !waited.result?.timeout) : stateChanged
+
+  return {
+    ok: true,
+    result: {
+      action: { name: toolName, result: acted.result },
+      verified,
+      verificationStrength: hasExpectation ? "strong-explicit-postcondition" : "weak-observed-state-change",
+      stateChanged,
+      expectation: hasExpectation ? expectation : null,
+      waited: waited?.result || null,
+      before: beforeState,
+      after: afterState,
+      timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+    },
+  }
+}
+
 async function sendToContent(tabId, name, args) {
   if (!tabId) return { ok: false, error: "没有活动标签页" }
   const payload = { type: "omeety_execute_tool", tool: name, arguments: args }
@@ -707,14 +907,27 @@ const waitDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // BFCache、reload 或跨站导航时，message channel 中断只是可恢复的中间态。
 async function waitForAcrossNavigation(tabId, args = {}) {
   if (!tabId) return { ok: false, error: "没有活动标签页" }
-  const selector = args.selector ? String(args.selector) : null
-  const text = args.text ? String(args.text) : null
-  if (!selector && !text) return { ok: false, error: "wait_for 需要 selector 或 text" }
+  const expectationArgs = {
+    ...(args.selector ? { selector: String(args.selector) } : {}),
+    ...(args.text ? { text: String(args.text) } : {}),
+    ...(args.selectorGone ? { selectorGone: String(args.selectorGone) } : {}),
+    ...(args.textGone ? { textGone: String(args.textGone) } : {}),
+    ...(args.urlIncludes ? { urlIncludes: String(args.urlIncludes) } : {}),
+    ...(args.titleIncludes ? { titleIncludes: String(args.titleIncludes) } : {}),
+    ...(args.valueEquals !== undefined ? { valueEquals: String(args.valueEquals) } : {}),
+    ...(args.valueIncludes !== undefined ? { valueIncludes: String(args.valueIncludes) } : {}),
+    ...(typeof args.checked === "boolean" ? { checked: args.checked } : {}),
+    ...(args.targetUid ? { targetUid: String(args.targetUid) } : {}),
+    ...(args.targetSelector ? { targetSelector: String(args.targetSelector) } : {}),
+    ...(args.match === "all" ? { match: "all" } : {}),
+  }
+  const conditionKeys = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
+  if (!conditionKeys.some((key) => key in expectationArgs)) return { ok: false, error: "wait_for 需要至少一个验证条件" }
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10000), 500), 60000)
   const started = Date.now()
   let transientError = ""
   for (;;) {
-    const probe = await sendToContent(tabId, "omeety_wait_for", { selector, text, probeOnly: true })
+    const probe = await sendToContent(tabId, "omeety_wait_for", { ...expectationArgs, probeOnly: true })
     if (probe.ok && probe.result?.found) {
       return {
         ok: true,
@@ -750,11 +963,11 @@ async function waitForAcrossNavigation(tabId, args = {}) {
 // 固定宽 1280（原来是 scale 0.5）：4K 屏 0.5 后仍有 1920 宽、base64 易逼近 1MB 上限；
 // 视觉模型本身也只按 ~1.5K 像素读图，1280 宽 q0.7 ≈ 150-350KB，清晰度和体积都可预期。
 const SCREENSHOT_MAX_WIDTH = 1280
-async function captureDownscaled(tabId) {
+async function captureDownscaled(tabId, options = {}) {
   const tab = tabId ? await chrome.tabs.get(tabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
   if (!tab) return { ok: false, error: "没有活动标签页" }
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
-  const img = await downscale(dataUrl, SCREENSHOT_MAX_WIDTH, 0.7)
+  const img = await downscale(dataUrl, Number(options.maxWidth) || SCREENSHOT_MAX_WIDTH, 0.7, options.crop)
   return {
     ok: true,
     result: {
@@ -769,28 +982,52 @@ async function captureDownscaled(tabId) {
       // agent 从截图读坐标点击时，配 omeety_get_page_snapshot 的 viewport.devicePixelRatio 换算：
       //   CSS_x = screenshot_x × (viewport.width / image.width)
       image: { width: img.width, height: img.height, originalWidth: img.originalWidth, originalHeight: img.originalHeight },
-      coordinateSpace: "physical-pixels — divide by devicePixelRatio (from snapshot.viewport) to map to CSS pixels used by click_at",
+      sourceRect: img.sourceRect,
+      coordinateSpace: img.sourceRect
+        ? "element crop derived from CSS bbox; sourceRect is in original physical screenshot pixels"
+        : "physical-pixels — divide by devicePixelRatio (from snapshot.viewport) to map to CSS pixels used by click_at",
     },
   }
 }
 
-async function downscale(dataUrl, maxWidth, quality) {
+async function downscale(dataUrl, maxWidth, quality, crop = null) {
   const blob = await (await fetch(dataUrl)).blob()
   const bmp = await createImageBitmap(blob)
-  const scale = Math.min(1, maxWidth / bmp.width)
-  const w = Math.max(1, Math.round(bmp.width * scale))
-  const h = Math.max(1, Math.round(bmp.height * scale))
-  const canvas = new OffscreenCanvas(w, h)
-  const ctx = canvas.getContext("2d")
-  ctx.drawImage(bmp, 0, 0, w, h)
-  const out = await canvas.convertToBlob({ type: "image/jpeg", quality })
-  const buf = await out.arrayBuffer()
-  return {
-    dataUrl: `data:image/jpeg;base64,${bufToB64(buf)}`,
-    originalWidth: bmp.width, // 物理像素（captureVisibleTab 返回设备像素）
-    originalHeight: bmp.height,
-    width: w, // 下采样后实际像素 = agent 在图上读到的坐标空间
-    height: h,
+  try {
+    let sx = 0, sy = 0, sw = bmp.width, sh = bmp.height
+    let sourceRect = null
+    const bbox = crop?.bbox
+    const viewport = crop?.viewport
+    if (bbox && viewport?.width && viewport?.height) {
+      const scaleX = bmp.width / Number(viewport.width)
+      const scaleY = bmp.height / Number(viewport.height)
+      const padding = Math.max(0, Number(crop.padding) || 0)
+      sx = Math.min(bmp.width - 1, Math.max(0, Math.floor((Number(bbox.x) - padding) * scaleX)))
+      sy = Math.min(bmp.height - 1, Math.max(0, Math.floor((Number(bbox.y) - padding) * scaleY)))
+      const right = Math.min(bmp.width, Math.max(sx + 1, Math.ceil((Number(bbox.x) + Number(bbox.w) + padding) * scaleX)))
+      const bottom = Math.min(bmp.height, Math.max(sy + 1, Math.ceil((Number(bbox.y) + Number(bbox.h) + padding) * scaleY)))
+      sw = right - sx
+      sh = bottom - sy
+      sourceRect = { x: sx, y: sy, width: sw, height: sh }
+    }
+    const scale = Math.min(1, maxWidth / sw)
+    const w = Math.max(1, Math.round(sw * scale))
+    const h = Math.max(1, Math.round(sh * scale))
+    const canvas = new OffscreenCanvas(w, h)
+    const ctx = canvas.getContext("2d")
+    ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, w, h)
+    const out = await canvas.convertToBlob({ type: "image/jpeg", quality })
+    const buf = await out.arrayBuffer()
+    return {
+      dataUrl: `data:image/jpeg;base64,${bufToB64(buf)}`,
+      originalWidth: bmp.width, // 物理像素（captureVisibleTab 返回设备像素）
+      originalHeight: bmp.height,
+      width: w, // 下采样后实际像素 = agent 在图上读到的坐标空间
+      height: h,
+      sourceRect,
+    }
+  } finally {
+    bmp.close()
   }
 }
 
