@@ -16,7 +16,9 @@
   border: 2px solid #2563eb;
   background: rgba(37, 99, 235, 0.12);
   border-radius: 2px;
-  transition: left 0.04s, top 0.04s, width 0.04s, height 0.04s;
+  left: 0;
+  top: 0;
+  will-change: transform, width, height;
 }
 #omeety-pick-banner {
   position: fixed;
@@ -31,4 +33,12 @@
   font: 13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
   cursor: default;
+}
+
+/* Persistent multi-pick markers while selection mode is active. The stable
+   data-omeety-pick-id remains after completion for MCP actions, but the visual
+   outline is removed so Omeety does not permanently restyle the page. */
+[data-omeety-pick-active="1"] {
+  outline: 2px solid #2563eb !important;
+  outline-offset: 2px !important;
 }

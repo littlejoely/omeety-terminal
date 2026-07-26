@@ -25,7 +25,7 @@ combinations the same browser eyes and hands.
 The first public Windows beta includes:
 
 - a real ConPTY terminal with multiple tabs and side-panel session keepalive;
-- 31 browser MCP tools over Streamable HTTP, plus legacy SSE compatibility;
+- 32 browser MCP tools over Streamable HTTP, plus legacy SSE compatibility;
 - snapshots with stable element IDs, element picking, screenshots, Console
   capture, and navigation-resilient waits;
 - trusted CDP input, file uploads, and reversible page previews;
@@ -42,7 +42,7 @@ https://github.com/littlejoely/omeety-terminal
 
 I open-sourced Omeety Terminal: a real local terminal in the Edge/Chrome side
 panel that acts as a browser exoskeleton for Codex, Claude Code, Kimi Code, and
-any MCP CLI. Same active tab, same 31 browser tools, no agent lock-in.
+any MCP CLI. Same active tab, same 32 browser tools, no agent lock-in.
 
 Windows beta · MIT
 https://github.com/littlejoely/omeety-terminal

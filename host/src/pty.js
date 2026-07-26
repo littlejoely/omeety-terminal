@@ -92,13 +92,22 @@ export function resolveShell(choice) {
 // 退化成黑白。PTY 是 Omeety 自己创建的终端边界，因此在这里声明真实能力并清除父进程的
 // 偶然禁色标志；用户仍可在 shell 启动文件里显式重新设置 NO_COLOR。
 export function createPtyEnv(baseEnv = process.env) {
+  const locale = baseEnv.LC_ALL || baseEnv.LC_CTYPE || baseEnv.LANG || ""
+  const needsUtf8Locale = process.platform !== "win32" && !/utf-?8/i.test(locale)
   const env = augmentPath({
     ...baseEnv,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     TERM_PROGRAM: "Omeety",
-    LANG: baseEnv.LANG || "en_US.UTF-8",
+    LANG: needsUtf8Locale ? (process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8") : (baseEnv.LANG || locale),
   })
+  if (needsUtf8Locale) {
+    // LC_ALL overrides LANG/LC_CTYPE. Browsers launched from test runners or
+    // service managers often inherit LC_ALL=C, which makes zsh/readline echo
+    // Chinese IME and picked-page context as escaped bytes.
+    delete env.LC_ALL
+    env.LC_CTYPE = env.LANG
+  }
   delete env.NO_COLOR
   // 不沿用其他终端（例如启动 Chrome 的 Ghostty）的版本号，避免能力探测误判。
   delete env.TERM_PROGRAM_VERSION

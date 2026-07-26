@@ -4,12 +4,14 @@
 
 import { buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
 import { loadSettings } from "./storage.js"
+import { OutputReplayBuffer } from "./output-replay-buffer.js"
 
 const NM_NAME = "com.omeety.terminal"
 
 let nativePort = null
 const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel"}) 连进来
-let lastPick = null // 用户用 📌 选取的元素（content.js 回传），供 omeety_get_user_pick 工具取
+let lastPick = null // 最近一个选取（兼容 omeety_get_user_pick）
+let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
 const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
 
@@ -36,8 +38,8 @@ function getRuntimeMetrics() {
     uptimeMs: Date.now() - runtimeStartedAt,
     nativeConnected: !!nativePort,
     panelConnections: panelPorts.size,
-    replayBufferBytes: outputBufLen,
-    replayBufferChunks: outputBuf.length,
+    replayBufferBytes: outputBuf.totalLength,
+    replayBufferChunks: outputBuf.entryCount,
     cdpAttachedTabs: cdpAttachedTabs.size,
     totals: {
       calls: tools.reduce((sum, item) => sum + item.calls, 0),
@@ -50,15 +52,10 @@ function getRuntimeMetrics() {
 
 // 最近 PTY 输出的环形缓冲（按 sid 分条记录）：面板重开建好 tab 后主动 replay_request 回放，
 // 避免终端一片空白（轻量，仅近 64KB）。注意不能直接无 sid 回放——面板按 sid 路由，对不上会整条丢弃。
-const outputBuf = [] // [{ sid, data }]
-let outputBufLen = 0
 const OUTPUT_BUF_MAX = 65536
+const outputBuf = new OutputReplayBuffer(OUTPUT_BUF_MAX)
 function pushOutput(sid, data) {
-  outputBuf.push({ sid, data })
-  outputBufLen += data.length
-  while (outputBufLen > OUTPUT_BUF_MAX && outputBuf.length > 1) {
-    outputBufLen -= outputBuf.shift().data.length
-  }
+  outputBuf.push(sid, data)
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -83,9 +80,19 @@ ensureOffscreen()
 
 // content.js 回传的用户选取元素（点 📌 选取 → 在页面点中元素）
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (msg?.type === "omeety_pick_done") {
-    lastPick = msg.pick ? { ...msg.pick, tabId: sender.tab?.id ?? null } : null
-    broadcast({ type: "pick_result", pick: lastPick })
+  if (msg?.type === "omeety_pick_progress") {
+    broadcast({ type: "pick_progress", count: Array.isArray(msg.picks) ? msg.picks.length : 0 })
+  } else if (msg?.type === "omeety_pick_done") {
+    const tabId = sender.tab?.id ?? null
+    const picks = Array.isArray(msg.picks) ? msg.picks : msg.pick ? [msg.pick] : []
+    lastPickSet = picks.length ? { tabId, picks: picks.map((pick) => ({ ...pick, tabId })) } : null
+    lastPick = lastPickSet?.picks.at(-1) || null
+    broadcast({
+      type: "pick_result",
+      pick: lastPick,
+      picks: lastPickSet?.picks || [],
+      cancelled: Boolean(msg.cancelled),
+    })
   }
 })
 
@@ -169,10 +176,10 @@ chrome.runtime.onConnect.addListener((port) => {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，
       // 否则会把别的 tab 的终端输出灌进当前 tab（跨 tab 串话）。
       const want = String(m.sid || "")
-      const entries = outputBuf.filter((e) => e.sid === want)
-      if (entries.length) {
+      const replay = outputBuf.read(want)
+      if (replay) {
         try {
-          port.postMessage({ type: "output", sid: want, data: entries.map((e) => e.data).join("") })
+          port.postMessage({ type: "output", sid: want, data: replay })
         } catch {
           /* dead */
         }
@@ -434,6 +441,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   const fc = pendingFileChoosers.get(tabId)
   if (fc) { clearTimeout(fc.timer); pendingFileChoosers.delete(tabId) }
   if (lastPick?.tabId === tabId) lastPick = null // 该 tab 关了，它的 pick 失效，避免串到别的 tab
+  if (lastPickSet?.tabId === tabId) lastPickSet = null
   if (cdpAttachedTabs.has(tabId)) void cdpDetachTab(tabId)
 })
 // 切换活动标签页 → 通知面板（选取态切 tab 时提示：选取按页面独立，本页需重选）
@@ -477,6 +485,15 @@ async function handleToolCall({ id, name, args }) {
         r = lastPick
           ? { ok: true, result: lastPick }
           : { ok: true, result: { pick: null, msg: "用户还没选取元素。让用户点侧栏 📌 选取，再到页面点一下目标元素。" } }
+      }
+    } else if (name === "omeety_get_user_picks") {
+      const curTabId = tab?.id ?? null
+      if (lastPickSet && lastPickSet.tabId != null && lastPickSet.tabId !== curTabId) {
+        r = { ok: true, result: { count: 0, picks: [], msg: `选取来自 tab ${lastPickSet.tabId}，当前活动 tab 是 ${curTabId}，请在该 tab 重新选取` } }
+      } else if (lastPickSet?.picks?.length) {
+        r = { ok: true, result: { count: lastPickSet.picks.length, picks: lastPickSet.picks, tabId: lastPickSet.tabId } }
+      } else {
+        r = { ok: true, result: { count: 0, picks: [], msg: "用户还没有完成连续选取。点侧栏「选取」，在页面连续点选，按 Enter 或再点「完成选取」。" } }
       }
     } else if (name === "omeety_list_tabs") {
       const tabs = await chrome.tabs.query({})

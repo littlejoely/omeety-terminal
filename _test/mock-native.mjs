@@ -1,5 +1,5 @@
 // Mock native messaging + MCP SSE：冒烟测试 host（无需浏览器）。
-// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(31) ④ tools/call 中继往返。
+// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(32) ④ tools/call 中继往返。
 // 端口用随机高位端口（OMEETY_MCP_PORT 传给 host），避免和正在运行的真实 host 抢 49171。
 import { spawn } from "node:child_process"
 import { once } from "node:events"
@@ -19,6 +19,7 @@ const child = spawn(process.execPath, ["src/index.js"], {
     ...process.env,
     OMEETY_MCP_PORT: String(PORT),
     NO_COLOR: "1",
+    LC_ALL: "C",
     TERM_PROGRAM: "parent-terminal",
     TERM_PROGRAM_VERSION: "9.9.9",
   },
@@ -143,7 +144,7 @@ try {
   await sleep(1800)
   ok(outputs.join("").toLowerCase().includes("omeety_mock_test_42"), "PTY echo 回显")
 
-  const colorProbe = `node -e "console.log('OMEETY_COLOR_ENV:'+Buffer.from(JSON.stringify({TERM:process.env.TERM,COLORTERM:process.env.COLORTERM,NO_COLOR:process.env.NO_COLOR||null,TERM_PROGRAM:process.env.TERM_PROGRAM,TERM_PROGRAM_VERSION:process.env.TERM_PROGRAM_VERSION||null})).toString('base64'))"\r\n`
+  const colorProbe = `node -e "console.log('OMEETY_COLOR_ENV:'+Buffer.from(JSON.stringify({TERM:process.env.TERM,COLORTERM:process.env.COLORTERM,NO_COLOR:process.env.NO_COLOR||null,TERM_PROGRAM:process.env.TERM_PROGRAM,TERM_PROGRAM_VERSION:process.env.TERM_PROGRAM_VERSION||null,LANG:process.env.LANG||null,LC_ALL:process.env.LC_ALL||null,LC_CTYPE:process.env.LC_CTYPE||null})).toString('base64'))"\r\n`
   send({ type: "input", data: colorProbe })
   await sleep(800)
   const colorMatches = [...outputs.join("").matchAll(/OMEETY_COLOR_ENV:([A-Za-z0-9+/]+={0,2})/g)]
@@ -158,8 +159,13 @@ try {
       ptyColorEnv?.COLORTERM === "truecolor" &&
       ptyColorEnv?.NO_COLOR === null &&
       ptyColorEnv?.TERM_PROGRAM === "Omeety" &&
-      ptyColorEnv?.TERM_PROGRAM_VERSION === null,
-    "PTY 清除父进程 NO_COLOR 并声明 256 色/True Color 能力",
+      ptyColorEnv?.TERM_PROGRAM_VERSION === null &&
+      (process.platform === "win32" || (
+        /utf-?8/i.test(ptyColorEnv?.LANG || "") &&
+        ptyColorEnv?.LC_ALL === null &&
+        /utf-?8/i.test(ptyColorEnv?.LC_CTYPE || "")
+      )),
+    "PTY 清除 NO_COLOR/非 UTF-8 locale 并声明 256 色/True Color 能力",
   )
 
   send({ type: "session_meta", sid: "default", title: "恢复测试", renamed: true, punctCompat: true })
@@ -176,7 +182,7 @@ try {
   const httpTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`))
   await httpClient.connect(httpTransport)
   const httpList = await httpClient.listTools()
-  ok(httpList?.tools?.length === 31, `Streamable HTTP tools/list = 31 (实际 ${httpList?.tools?.length})`)
+  ok(httpList?.tools?.length === 32, `Streamable HTTP tools/list = 32 (实际 ${httpList?.tools?.length})`)
   const httpCall = await httpClient.callTool({ name: "omeety_get_page_snapshot", arguments: {} })
   ok(httpCall?.content?.[0]?.text?.includes("mocked"), "Streamable HTTP tools/call 中继往返")
   await httpClient.close()
@@ -191,10 +197,11 @@ try {
   await post({ jsonrpc: "2.0", id: 1, method: "tools/list" })
   await sleep(800)
   const list = sseMessages.find((m) => m.id === 1)
-  ok(list?.result?.tools?.length === 31, `MCP tools/list = 31 (实际 ${list?.result?.tools?.length})`)
+  ok(list?.result?.tools?.length === 32, `MCP tools/list = 32 (实际 ${list?.result?.tools?.length})`)
   ok(list?.result?.tools?.some((t) => t.name === "omeety_capture_visible_tab"), "工具含 omeety_capture_visible_tab")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_execute_js"), "工具含 omeety_execute_js（新增）")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_wait_for"), "工具含 omeety_wait_for（新增）")
+  ok(list?.result?.tools?.some((t) => t.name === "omeety_get_user_picks"), "工具含 omeety_get_user_picks（连续选取）")
 
   await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "omeety_get_page_snapshot", arguments: {} } })
   await sleep(1500)

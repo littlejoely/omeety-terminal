@@ -14,6 +14,11 @@ Browser intelligence, terminal session, and resource lifecycle / 浏览器智能
   DOM context, diagnostics, and a cropped screenshot returned as MCP image content.
 - Add `omeety_act_and_verify` for action + navigation-resilient postcondition transactions.
 - Add incremental light snapshots and `omeety_get_runtime_metrics` latency/reliability reporting.
+- Add continuous multi-element picking with stable `pick-1..N` references,
+  `omeety_get_user_picks`, and safe no-Enter context injection into the active
+  terminal/Agent input line.
+- Add a real Edge/Native Messaging/ConPTY/WebGL performance baseline covering
+  idle main-thread cost, output throughput, heap/DOM size, and terminal-tab cleanup.
 - Restore every live terminal tab from the Native Host after reopening the side panel.
 - Add configurable per-tab scrollback: 3,000 / 5,000 / 10,000 / 20,000 lines.
 - Add side-panel close policies: keep indefinitely, reclaim after 30 idle
@@ -32,6 +37,9 @@ Browser intelligence, terminal session, and resource lifecycle / 浏览器智能
   including repeated disconnects.
 - Traverse open Shadow DOM and same-origin iframes when collecting visible text,
   controls, UIDs, and compound wait conditions.
+- Replace replay-buffer `Array.shift()` eviction with an amortized O(1) bounded queue.
+- Limit picker hit-testing and layout reads to once per animation frame and
+  remove lagging highlight-position transitions.
 
 ### Fixed / 修复
 
@@ -42,6 +50,9 @@ Browser intelligence, terminal session, and resource lifecycle / 浏览器智能
   paste path so Codex can collapse long pasted content instead of rendering it inline.
 - Prevent a browser-launcher `NO_COLOR` value from leaking into PTYs; advertise
   xterm-256color/truecolor and Omeety as the terminal so Codex keeps its color UI.
+- Commit the final WebGL cursor model and IME textarea anchor when an xterm
+  synchronized-output transaction ends; the buffer no longer advances while
+  the rendered cursor remains at its pre-transaction position.
 
 ## [0.1.1] - 2026-07-26
 

@@ -70,16 +70,28 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
 
   // renderService.handleCursorMove 的原版引用；提交后补一次（blink 相位重置 + link layer）
   let cgForwardCursorMove = () => {}
+  let cgForwardTextArea = () => {}
   function cgCommit() {
     const b = cgBuffer()
     if (!b) return
+    const previousX = cgCommittedX
+    const previousY = cgCommittedY
     cgCommittedX = b.x
     cgCommittedY = b.y
+    const committedX = b.x
+    const committedY = b.y
     hostEl.dataset.omeetyCursorCommitted = `${b.x},${b.y}`
     // 延迟到 rAF 里调 handleCursorMove，和 xterm 渲染循环对齐（避免 commit 时立即触发
     // 一次 cursor 层渲染，和 rAF 主渲染产生双渲染 → 输入/回退时 cursor 频闪）。
     requestAnimationFrame(() => {
-      if (!_disposed && cgSettleTimer === 0) cgForwardCursorMove()
+      if (_disposed || cgSettleTimer !== 0) return
+      cgForwardCursorMove()
+      cgForwardTextArea()
+      // During pinning, WebGL rendered the committed cursor and xterm's normal
+      // cursor-move callbacks were deliberately swallowed. Once the transaction
+      // settles, explicitly repaint both the old and final rows so the GPU model
+      // drops the old cursor and commits the final one in the same frame.
+      if (previousX !== committedX || previousY !== committedY) refreshCursorRows(previousY, committedY)
     })
   }
   function cgArmSettle(ms) {
@@ -214,6 +226,9 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
     const coreTerm = term?._core
     if (coreTerm && typeof coreTerm._syncTextArea === "function") {
       const originalSyncTextArea = coreTerm._syncTextArea.bind(coreTerm) // 覆盖前先存原型方法
+      cgForwardTextArea = () => {
+        try { originalSyncTextArea() } catch { /* ignore */ }
+      }
       coreTerm._syncTextArea = function () {
         if (!cgPinned()) {
           // 未钉住：走原生实现（此时 committed 与 live 一致，行为与原版相同）
