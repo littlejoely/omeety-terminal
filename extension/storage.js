@@ -2,7 +2,7 @@
 
 const SETTINGS_KEY = "settings"
 const DEFAULT_SETTINGS = {
-  shell: "powershell", // powershell | cmd | pwsh | gitbash | 自定义路径
+  shell: "auto", // auto | zsh | bash | fish | powershell | cmd | pwsh | gitbash | 自定义路径
   cols: 80,
   rows: 24,
   fontSize: 12, // 终端字号，Ctrl+滚轮/Ctrl+=/Ctrl+- 调整后自动记住

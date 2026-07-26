@@ -45,6 +45,7 @@ if (fs.existsSync(claude)) {
 
 // ---- TOML（codex / kimi）：[mcp_servers.omeety_terminal] url=...  幂等 ----
 function setToml(text, blockLines) {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n"
   const lines = text.split(/\r?\n/)
   const out = []
   let i = 0
@@ -61,10 +62,10 @@ function setToml(text, blockLines) {
     out.push(lines[i])
     i++
   }
-  let res = out.join("\r\n")
+  let res = out.join(eol)
   if (!replaced) {
-    if (res && !res.endsWith("\r\n")) res += "\r\n"
-    res += "\r\n" + blockLines.join("\r\n") + "\r\n"
+    if (res && !res.endsWith(eol)) res += eol
+    res += eol + blockLines.join(eol) + eol
   }
   return res
 }
@@ -72,7 +73,7 @@ function setToml(text, blockLines) {
 for (const [label, dir] of [["codex", ".codex"], ["kimi", ".kimi-code"]]) {
   const toml = path.join(HOME, dir, "config.toml")
   if (!fs.existsSync(toml)) {
-    console.log(`${label}: ${dir}\\config.toml 不存在，跳过`)
+    console.log(`${label}: ${dir}/config.toml 不存在，跳过`)
     continue
   }
   try {

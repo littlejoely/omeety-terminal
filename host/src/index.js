@@ -131,7 +131,7 @@ function spawnShell(sid, shellChoice, cols, rows) {
       args,
       cols,
       rows,
-      cwd: process.env.USERPROFILE,
+      cwd: process.env.USERPROFILE || process.env.HOME,
       onOutput: (d) => nmSend({ type: "output", sid, data: d }),
       onExit: (code) => {
         // 切换 shell 时旧 PTY 的退出事件可能晚于新 PTY 的 spawn。只允许当前
