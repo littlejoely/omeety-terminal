@@ -1,0 +1,259 @@
+:root {
+  --bg: #1e1e1e;
+  --fg: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #0f766e;
+  --accent-hover: #115e57;
+  --danger: #ef4444;
+  --border: #3a3a3a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border-radius: 10px; /* 整个侧栏圆角 */
+  overflow: hidden;    /* 子元素裁剪到圆角 */
+}
+
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column; /* 两行结构 */
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border); /* 仅头部与终端的分隔线；两行之间不画线 */
+  background: #161616;
+}
+.topbar-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.controls-row { flex: 0 0 auto; }
+.status-row { flex: 0 0 auto; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.dot.ok { background: #22c55e; }
+.dot.busy { background: var(--accent); animation: pulse 1s infinite; }
+.dot.err { background: var(--danger); }
+@keyframes pulse { 50% { opacity: 0.4; } }
+.status-text {
+  color: var(--muted); font-size: 12px;
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; /* 第二行有整行空间，超长仍省略号、不换行 */
+}
+
+button {
+  font: inherit; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  border-radius: 6px; padding: 6px 10px;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+.icon-btn { padding: 5px 9px; white-space: nowrap; }
+.icon-btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.ghost { background: transparent; }
+
+.view { display: none; flex-direction: column; flex: 1 1 auto; min-height: 0; position: relative; }
+.view.active { display: flex; }
+
+/* tab 栏（多终端，已并入 topbar 单行）。
+   窄侧栏修复：真实 shell 标题（PowerShell 路径等）很长，每个 tab 撑到 max-width 160px，
+   多个 tab 在窄侧栏里放不下 → overflow-x 滚动 + scrollIntoView 把激活 tab 滚进视图，
+   会把其余 tab 推到屏幕外左边；而原来 scrollbar height:0 把滚动条藏掉 → 被滚走的 tab
+   既看不见也滚不回，用户点原位置 = 点到空白 = “像点了空气/无法切换”。
+   修法：① tab 加 min-width:0（解除 flex 项默认 min-width:auto“不低于文字宽度”的限制），
+   让 tab 收缩铺满、标题省略号截断——所有 tab 始终可见可点；② 滚动条改成可见细条，
+   极端多 tab（连 × 都挤不下）时仍能滚到。 */
+.tabs { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; overflow-x: auto; }
+.tabs::-webkit-scrollbar { height: 3px; }
+.tabs::-webkit-scrollbar-track { background: transparent; }
+.tabs::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 2px; }
+.tabs::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+.tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px 5px 0 0;
+  background: #222;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 160px;
+  min-width: 20px;     /* 收缩铺满，但保持最小可点宽度 20px（再窄就触发横向滚动） */
+  overflow: hidden;
+}
+.tab.active { background: #000; color: var(--fg); }
+.tab-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.tab-close { flex: 0 0 auto; }   /* 收缩时 × 不被挤掉，保证始终可点关闭 */
+.tab-close { opacity: 0.6; padding: 0 2px; border-radius: 3px; }
+.tab-close:hover { opacity: 1; background: rgba(255,255,255,0.12); }
+.tab-new { flex: 0 0 auto; padding: 2px 8px; font-size: 16px; line-height: 1; background: transparent; border: none; color: var(--muted); }
+.tab-new:hover { background: rgba(255,255,255,0.08); color: var(--fg); }
+
+/* tab 右键菜单（重命名 / codex 标点兼容） */
+.tab-ctx {
+  position: fixed; z-index: 30;
+  background: #1e1e1e; border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  display: flex; flex-direction: column; gap: 2px; min-width: 168px;
+}
+.tab-ctx button {
+  text-align: left; padding: 6px 10px; border: none; background: transparent;
+  color: var(--fg); border-radius: 4px; font: inherit; cursor: pointer; white-space: nowrap;
+}
+.tab-ctx button:hover { background: rgba(255, 255, 255, 0.1); }
+.tab-ctx .ctx-toggle.on { color: #22c55e; }
+
+/* 多 tab 叠放：不用 display:none（会让隐藏 tab 的 xterm 测得 0×0，切回全量重绘闪烁、
+   且期间 PTY 按错行列数渲染）。改绝对定位叠放 + visibility 隐藏：每个 tab 始终保持
+   真实像素尺寸，切回零闪烁、行列数不错位。 */
+.terminal-host { flex-direction: column; position: relative; }
+.terminal-tab { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+.terminal-tab.active { visibility: visible; pointer-events: auto; }
+
+/* 复制成功提示 */
+.omeety-copied-badge {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  background: #22c55e;
+  color: #fff;
+  padding: 2px 9px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+  z-index: 20;
+}
+.omeety-copied-badge.show { opacity: 1; }
+
+/* 终端内搜索条（Ctrl+F）：浮在终端右上角 */
+.omeety-search {
+  position: absolute;
+  top: 6px;
+  right: 24px; /* 避开自定义滚动条 */
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #161616;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.omeety-search[hidden] { display: none; }
+.omeety-search input {
+  font: inherit;
+  width: 160px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: var(--fg);
+}
+.omeety-search input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.omeety-search button {
+  padding: 2px 7px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  line-height: 1.2;
+}
+.omeety-search button:hover { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
+
+/* 终端容器：尺寸由 flex 决定，不随 .xterm 内容反噬（否则 fit↔ResizeObserver 抖动）。
+   overflow: clip（不是 hidden）：让本盒子彻底不可滚动。xterm 的隐藏输入框在 left:-9999em（屏幕外左侧），
+   聚焦时浏览器本会把“最近的可滚动祖先”向左滚（=整页左移）；hidden 仍可被程序滚动、会被带跑，
+   而 clip 使 .terminal-host 不再是可滚动祖先 → 焦点滚动被跳过、不左移；
+   同时 textarea 保持默认 absolute 定位 → 中文输入法候选框仍跟在光标处（不像 fixed 那样跑到左上角）。 */
+.terminal-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 6px;
+  background: #000;
+  overflow: clip;
+}
+.terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+  contain: paint; /* 隔离重绘：终端内滚动重绘不触发外层 repaint */
+}
+.terminal-host .xterm .xterm-helper-textarea {
+  caret-color: transparent !important;
+}
+.terminal-host .xterm .xterm-cursor-blink {
+  animation: none !important;
+  opacity: 1 !important;
+}
+/* 注：早期为 DOM 渲染器加的 will-change/translateZ 在 WebGL canvas 上反而和它自己的
+   GPU 合成层打架、引起掉帧，故移除。滚动流畅度现在靠：WebGL 渲染器 + contain:paint
+   隔离重绘 + write 批量化减少主线程占用 + scrollSensitivity 调节跟手度。 */
+.terminal-host .xterm .xterm-viewport {
+  overflow: hidden; /* 实际滚动走自定义滚动条（下方），隐藏原生滚动条及其占位 */
+}
+/* 细圆角滚动条：这版 xterm 用 VS Code 风格的 .xterm-scrollable-element > .scrollbar（默认 14px），
+   不是原生 ::-webkit-scrollbar。改 .scrollbar 宽度 + .slider 圆角/配色，箭头隐藏更简洁。 */
+.terminal-host .xterm .xterm-scrollable-element > .scrollbar { width: 1px !important; right: 4px !important; }
+.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  width: 1px !important;
+  border-radius: 3px !important;
+  background: rgba(255, 255, 255, 0.6) !important;
+}
+.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+  background: rgba(255, 255, 255, 0.85) !important;
+}
+.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .scra { display: none !important; }
+.ack-gate {
+  position: absolute;
+  inset: 0; /* 覆盖整个终端视图（含 tab 栏）；顶栏在其外，仍可点 */
+  background: rgba(0,0,0,0.92);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10;
+  padding: 20px;
+}
+.ack-gate[hidden] { display: none; }
+.ack-box { max-width: 340px; text-align: center; }
+.ack-box h3 { margin: 0 0 8px; }
+.ack-box p { color: var(--muted); font-size: 12px; margin: 0 0 16px; line-height: 1.6; }
+
+/* 设置 */
+.settings-body {
+  flex: 1 1 auto; overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.settings-body h2 { margin: 0 0 4px; font-size: 16px; }
+.settings-body label { font-size: 12px; color: var(--muted); margin-top: 12px; margin-bottom: 4px; }
+.settings-body input, .settings-body select {
+  font: inherit; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: #2a2a2a; color: var(--fg);
+}
+.settings-body input:focus, .settings-body select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.settings-body input[readonly] { opacity: 0.7; }
+.actions-row { display: flex; gap: 8px; margin-top: 18px; }
+.actions-row button { flex: 1; }
+/* 设置页滚动条：2px 轨道，thumb 右内缩 1px 透明边 → 可见 1px、离右边缘 1px（像终端那样细，不分裂） */
+.settings-body::-webkit-scrollbar { width: 2px; height: 2px; }
+.settings-body::-webkit-scrollbar-track { background: transparent; }
+.settings-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.6); border-right: 1px solid transparent; background-clip: padding-box; }
+.settings-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.85); }
+
+/* 工具列表（设置→已注册工具，按类别分组）。#toolsDetails 上方加横线分隔，不紧贴"保存"按钮，位于"怎么用"上方 */
+#toolsDetails { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 10px; }
+.tools-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.tool-cat { font-size: 11px; color: var(--accent); margin: 10px 0 2px; font-weight: 700; }
+.tool-item { margin: 0 0 6px 10px; }
+.tool-item code { font-size: 11px; font-weight: 600; }
+
+.help { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 10px; }
+.help summary { cursor: pointer; color: var(--muted); }
+.help ol { font-size: 12px; color: var(--muted); line-height: 1.7; padding-left: 18px; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+code { background: #2a2a2a; padding: 0 4px; border-radius: 3px; }

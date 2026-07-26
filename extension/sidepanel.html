@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Omeety Terminal</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row controls-row">
+      <div class="tabs" id="tabs" title="右键重命名"></div>
+      <button class="tab-new" id="tabNew" title="新建终端">＋</button>
+      <button id="pickBtn" class="icon-btn" title="选取页面元素给 AI（再到页面点一下元素；再点一次或 Esc 取消）">选取</button>
+      <button id="settingsToggle" class="icon-btn" title="设置">⚙</button>
+    </div>
+    <div class="topbar-row status-row">
+      <span class="dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">连接中…</span>
+    </div>
+  </header>
+
+  <!-- 终端视图 -->
+  <main class="view active" id="terminalView">
+    <!-- 安全确认门 -->
+    <div class="ack-gate" id="ackGate">
+      <div class="ack-box">
+        <h3>⚠ 这是一个真·终端</h3>
+        <p>它拥有你电脑的完整权限（能运行任何命令）。浏览器工具只 bind 本机 127.0.0.1。</p>
+        <button id="ackBtn" class="primary">我了解，进入终端</button>
+      </div>
+    </div>
+    <div id="terminalHost" class="terminal-host"></div>
+  </main>
+
+  <!-- 设置视图 -->
+  <section class="view" id="settingsView">
+    <div class="settings-body">
+      <h2>设置</h2>
+
+      <label>Shell（终端用的命令行）</label>
+      <select id="shellSelect">
+        <option value="powershell">PowerShell（默认）</option>
+        <option value="cmd">CMD</option>
+        <option value="pwsh">PowerShell 7 (pwsh，若已装)</option>
+        <option value="gitbash">Git Bash（若已装 Git）</option>
+        <option value="custom">自定义路径…</option>
+      </select>
+      <input id="shellCustom" type="text" placeholder="如 C:\\Program Files\\PowerShell\\7\\pwsh.exe" hidden />
+
+      <label>MCP 端口</label>
+      <input id="mcpPort" type="text" value="49171" readonly />
+      <p class="muted small">claude/codex/kimi 的配置在安装时自动写入：<code>http://127.0.0.1:49171/mcp</code></p>
+
+      <div class="actions-row">
+        <button id="saveBtn" class="primary">保存并重连</button>
+        <button id="backBtn" class="ghost">返回终端</button>
+      </div>
+
+      <details id="toolsDetails">
+        <summary>已注册的浏览器工具</summary>
+        <div id="toolsList" class="tools-list muted small">展开时从 host 加载…</div>
+      </details>
+
+      <details class="help">
+        <summary>怎么用</summary>
+        <ol>
+          <li>装好本地 host（项目 <code>installer/install.ps1</code>）。</li>
+          <li>这里就是个真终端，敲 <code>claude</code> / <code>codex</code> / <code>kimi</code> 即可；它们已自动连上浏览器工具。</li>
+          <li>在 agent 里说"描述当前网页"→ 它会读取你当前 Edge 标签页。</li>
+          <li>快捷键：<code>Ctrl+F</code> 搜索输出 · <code>Ctrl+点击</code> 开链接 · <code>Ctrl+滚轮</code> 调字号 · <code>Ctrl+Alt+T/W/←/→</code> 新建/关闭/切换终端 tab。</li>
+          <li>tab 标题会随 shell 自动改名（PowerShell/bash 的标题命令）；右键 tab 可手动重命名，手动后不再被自动覆盖。</li>
+        </ol>
+      </details>
+    </div>
+  </section>
+
+  <script src="vendor/terminal.bundle.js"></script>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
