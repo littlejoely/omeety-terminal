@@ -292,11 +292,16 @@ function applyAckGate() {
 // ---------- 启动 ----------
 ;(async () => {
   curSettings = await loadSettings()
-  const builtInShells = new Set(["powershell", "cmd", "pwsh", "gitbash"])
-  shellSelect.value = builtInShells.has(curSettings.shell) ? curSettings.shell : "custom"
+  const isMac = /Mac/.test(navigator.platform)
+  const knownShells = new Set(["auto", "zsh", "bash", "fish", "powershell", "cmd", "pwsh", "gitbash"])
+  shellSelect.value = knownShells.has(curSettings.shell) ? curSettings.shell : "custom"
+  document.querySelectorAll("#shellSelect option[data-platform]").forEach((option) => {
+    option.hidden = isMac ? option.dataset.platform === "windows" : option.dataset.platform === "unix"
+  })
+  shellCustom.placeholder = isMac ? "如 /bin/zsh" : "如 C:\\Program Files\\PowerShell\\7\\pwsh.exe"
   if (shellSelect.value === "custom") {
     shellCustom.hidden = false
-    shellCustom.value = curSettings.shell || ""
+    shellCustom.value = curSettings.shell === "custom" ? "" : curSettings.shell
   }
   applyAckGate()
 
@@ -363,7 +368,7 @@ shellSelect.addEventListener("change", () => {
 })
 
 $("saveBtn").addEventListener("click", async () => {
-  const shell = resolvedShell() || "powershell"
+  const shell = resolvedShell() || "auto"
   const button = $("saveBtn")
   button.disabled = true
   try {

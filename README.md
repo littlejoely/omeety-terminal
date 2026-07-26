@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-8aa4ff?style=flat-square)](#已知限制--安全)
+[![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#已知限制--安全)
 [![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#支持的浏览器工具28-个agent-自动可用)
 
 **Omeety Terminal 是 CLI Agent 的浏览器外骨骼：把真实本地终端放进
@@ -25,7 +25,7 @@ CLI Agent 共用当前网页的同一双眼睛和手。**
 `git`、`npm`、`claude`、`codex`、`kimi` 或任意本地命令；区别是里面的 Agent
 自动获得了当前浏览器标签页的感知和操作能力。
 
-这是一个独立开发的 Windows Beta 项目，不是 OpenAI、Anthropic、Moonshot AI、
+这是一个独立开发的 Windows/macOS Beta 项目，不是 OpenAI、Anthropic、Moonshot AI、
 Microsoft 或 xterm.js 的官方产品。
 
 ## 为什么是 Omeety
@@ -42,8 +42,18 @@ Microsoft 或 xterm.js 的官方产品。
 
 ## 3 分钟快速开始
 
-当前版本已在 **Windows 11 + Microsoft Edge** 验证。先安装 Node.js LTS，以及
+当前版本已在 **Windows 11 + Microsoft Edge** 和 **macOS + Google Chrome** 验证。先安装 Node.js LTS，以及
 你准备使用的 `codex`、`claude` 或 `kimi` CLI。
+
+macOS：
+
+```bash
+git clone https://github.com/littlejoely/omeety-terminal.git
+cd omeety-terminal
+./installer/install.sh
+```
+
+Windows：
 
 ```powershell
 git clone https://github.com/littlejoely/omeety-terminal.git
@@ -53,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 然后：
 
-1. 打开 `edge://extensions` → 开启开发者模式 → **加载已解压的扩展**。
+1. 打开 `chrome://extensions` 或 `edge://extensions` → 开启开发者模式 → **加载已解压的扩展**。
 2. 选择仓库里的 `extension` 文件夹。
 3. 点击 Omeety 图标打开侧栏，在真实终端里运行 `codex`、`claude` 或 `kimi`。
 4. 对 Agent 说：**“描述当前网页”**，或点侧栏的**选取**后让它操作目标元素。
@@ -115,6 +125,18 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 ## 完整安装说明
 
+### macOS（Chrome）
+
+```bash
+# 请在 macOS 自带 Terminal / iTerm 中，从项目根目录执行
+./installer/install.sh
+```
+
+如果 macOS 询问是否允许 `node` 使用开发者工具，请选择**允许**；拒绝后
+`node-pty` 原生模块将无法加载，可在“系统设置 → 隐私与安全性 → 开发者工具”中重新允许。
+
+### Windows（Edge / Chrome）
+
 ```powershell
 # 在项目根目录
 powershell -ExecutionPolicy Bypass -File installer\install.ps1
@@ -122,24 +144,24 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 安装器会：
 1. 给 host 装 npm 依赖（`node-pty` / MCP SDK / express）。
-2. 生成 `host/host-manifest.json`，注册到注册表（Edge + Chrome，HKCU，免管理员）。
+2. 生成 `host/host-manifest.json`；Windows 注册到 HKCU，macOS 安装到浏览器用户级 `NativeMessagingHosts` 目录，均不需要管理员权限。
 3. 把 MCP（`http://127.0.0.1:49171/mcp`）写进 `claude`、`codex`、`kimi` 的配置（先备份成 `*.bak-时间戳`）。
 
 > 扩展 ID 由 `manifest.json` 的 `key` 固定为 `fjhjkmpldbepgcpfkhpolnnheccjaamg`，所以注册表的 `allowed_origins` 跨重载/换机稳定。
 
 然后加载扩展：
-1. `edge://extensions`（或 `chrome://extensions`）→ 打开**开发者模式**。
-2. **加载已解压的扩展** → 选 `omeety-terminal\extension`。
+1. `chrome://extensions`（或 `edge://extensions`）→ 打开**开发者模式**。
+2. **加载已解压的扩展** → 选择项目中的 `extension` 目录。
 3. 确认扩展 ID = `fjhjkmpldbepgcpfkhpolnnheccjaamg`。
 
 ## 使用
 
 1. 点扩展图标开侧栏 → 首次有"真·终端=整机权限"的确认门，点「我了解」。
-2. 出现 PowerShell 提示符。敲 `claude`（或 `codex` / `kimi`）。
+2. 出现系统 Shell 提示符（Windows 为 PowerShell，macOS 为 zsh）。敲 `claude`（或 `codex` / `kimi`）。
 3. 在 agent 里：
    - `/mcp`（claude）能看到 `omeety_terminal` + 28 个 `omeety_*` 工具已连上。
-   - 让它"描述当前网页" → 它会读取你**当前 Edge 标签页**的内容。
-4. 设置（⚙）：可切 shell（PowerShell / CMD / pwsh / Git Bash / 自定义路径）。
+   - 让它"描述当前网页" → 它会读取你**当前 Chrome/Edge 标签页**的内容。
+4. 设置（⚙）：可切换系统默认 Shell、zsh/bash/fish、PowerShell/CMD/Git Bash 或自定义路径。
 
 ## 终端快捷键 / 特性
 
@@ -163,8 +185,8 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 | 现象 | 处理 |
 |---|---|
-| 终端连不上（状态红点）| 确认 `install.ps1` 跑过、扩展 ID 与注册表 `allowed_origins` 一致、Node 已装 |
-| `/mcp` 里没有 omeety_terminal | 重新运行 `install.ps1`（会重写 agent 配置）；Codex 可用 `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp` |
+| 终端连不上（状态红点）| 重新运行当前系统的安装器（macOS：`install.sh`；Windows：`install.ps1`），确认扩展 ID 与 `allowed_origins` 一致、Node 已装 |
+| `/mcp` 里没有 omeety_terminal | 重新运行安装器（会重写 agent 配置）；Codex 可用 `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp` |
 | codex/kimi 连不上 MCP | 确认配置 URL 是 `http://127.0.0.1:49171/mcp`；检查 `~/.codex/config.toml`、`~/.kimi-code/config.toml` |
 | 终端里找不到 claude/codex/kimi | host 的 PATH 来自浏览器环境；用全路径运行，或把它们的目录加到系统 PATH 后重启浏览器 |
 | 关闭侧栏后再打开，少量旧输出没显示 | 会话仍在运行，但只回放最近 64KB 输出；继续输入即可，完整历史应由终端程序自身保存 |
@@ -172,17 +194,25 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 ## 卸载
 
+macOS：
+
+```bash
+./installer/uninstall.sh
+```
+
+Windows：
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\uninstall.ps1
 ```
-移除注册表项 + 从各 agent 配置删除 `omeety_terminal`（备份保留）。然后到 `edge://extensions` 移除扩展。
+移除 Native Messaging 注册 + 从各 Agent 配置删除 `omeety_terminal`（备份保留）。然后到浏览器扩展管理页移除扩展。
 
 ## 目录
 
 ```
 extension/    MV3 扩展（终端 + native 端口 + content 工具）
 host/         native messaging host（PTY + MCP Streamable HTTP，兼容 legacy SSE）
-installer/    install.ps1 / uninstall.ps1
+installer/    Windows PowerShell 与 macOS zsh 安装/卸载脚本
 shared/       协议说明
 tools/        gen-key.js（生成扩展 key + 固定 ID）
 _test/        mock-native 冒烟测试（无需浏览器）
@@ -193,7 +223,8 @@ _pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
 
 - **真终端 = 整机权限**：这是固有特性。host 的 MCP 只 bind `127.0.0.1`（不对外）；危险浏览器操作仍走页面内确认框。
 - 侧栏关闭后 offscreen document 会尽力保活 host/PTY，并只缓存最近 64KB 输出；退出浏览器、重载扩展、native host 崩溃或被系统回收仍会结束会话。
-- 仅 Windows 验证（ConPTY）；macOS/Linux 理论可行（改 `pty.js` 的 shell 选择即可）。
+- 已验证 Windows ConPTY 与 macOS Chrome + zsh PTY；Linux 尚未完成浏览器真机回归。
+- Safari 当前不受支持：Safari 没有 Chromium `sidePanel`、`offscreen`、`chrome.debugger/CDP` 的等价组合，并且其 Native Messaging 必须通过包含扩展的 macOS App。Safari 版需要独立容器 App 和浏览器适配层，不能直接加载本目录。
 - Codex 在浏览器侧栏终端中的光标/中文 IME 兼容性跟踪：
   [openai/codex#35438](https://github.com/openai/codex/issues/35438)。
 - 除 `docs/images` 中经审查的公开图片外，本地私钥、浏览器 Profile、日志、

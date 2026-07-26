@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-8aa4ff?style=flat-square)](#known-limitations-and-security)
+[![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
 [![MCP tools: 28](https://img.shields.io/badge/MCP_tools-28-5ee7b1?style=flat-square)](#browser-tools-28)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
@@ -27,7 +27,7 @@ run `git`, `npm`, `claude`, `codex`, `kimi`, or any local command as usual. The
 difference is that agents inside it automatically gain reliable perception and
 control of the browser tab you are already using.
 
-This is an independently developed Windows beta. It is not an official product
+This is an independently developed Windows/macOS beta. It is not an official product
 of OpenAI, Anthropic, Moonshot AI, Microsoft, or xterm.js.
 
 ## Why Omeety
@@ -44,8 +44,19 @@ of OpenAI, Anthropic, Moonshot AI, Microsoft, or xterm.js.
 
 ## 3-minute quick start
 
-The current release is verified on **Windows 11 with Microsoft Edge**. Install
-Node.js LTS and at least one CLI you plan to use: `codex`, `claude`, or `kimi`.
+The current release is verified on **Windows 11 with Microsoft Edge** and
+**macOS with Google Chrome**. Install Node.js LTS and at least one CLI you plan
+to use: `codex`, `claude`, or `kimi`.
+
+macOS:
+
+```bash
+git clone https://github.com/littlejoely/omeety-terminal.git
+cd omeety-terminal
+./installer/install.sh
+```
+
+Windows:
 
 ```powershell
 git clone https://github.com/littlejoely/omeety-terminal.git
@@ -55,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 Then:
 
-1. Open `edge://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+1. Open `chrome://extensions` or `edge://extensions`, enable **Developer mode**, and choose **Load unpacked**.
 2. Select the repository's `extension` directory.
 3. Open Omeety from the toolbar and run `codex`, `claude`, or `kimi` in the real terminal.
 4. Ask the agent to **“describe the current page”**, or use **Pick** and tell it what to do with the selected element.
@@ -141,6 +152,19 @@ tools for any detected Claude Code, Codex CLI, and Kimi Code installations.
 
 ## Full installation details
 
+### macOS (Chrome)
+
+```bash
+# Run from the repository root in macOS Terminal or iTerm
+./installer/install.sh
+```
+
+If macOS asks whether `node` may use developer tools, choose **Allow**. Denying
+the request prevents the native `node-pty` module from loading; it can be
+enabled again under **System Settings → Privacy & Security → Developer Tools**.
+
+### Windows (Edge / Chrome)
+
 ```powershell
 # From the repository root
 powershell -ExecutionPolicy Bypass -File installer\install.ps1
@@ -149,8 +173,9 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 The installer:
 
 1. Installs host dependencies (`node-pty`, the MCP SDK, and Express).
-2. Generates `host/host-manifest.json` and registers it for Edge and Chrome
-   under HKCU, without administrator privileges.
+2. Generates `host/host-manifest.json`. Windows registers it under HKCU;
+   macOS installs it in each detected browser's user-level
+   `NativeMessagingHosts` directory. Neither path needs administrator access.
 3. Adds `http://127.0.0.1:49171/mcp` to the Claude Code, Codex CLI, and Kimi
    Code configurations, creating timestamped backups first.
 
@@ -160,9 +185,9 @@ The public key in `manifest.json` fixes the extension ID as
 
 Then load the extension:
 
-1. Open `edge://extensions` or `chrome://extensions` and enable **Developer
+1. Open `chrome://extensions` or `edge://extensions` and enable **Developer
    mode**.
-2. Choose **Load unpacked** and select `omeety-terminal\extension`.
+2. Choose **Load unpacked** and select the repository's `extension` directory.
 3. Confirm that the extension ID is
    `fjhjkmpldbepgcpfkhpolnnheccjaamg`.
 
@@ -170,11 +195,12 @@ Then load the extension:
 
 1. Click the extension icon to open the side panel. On first use, acknowledge
    that a real terminal has full local user permissions.
-2. At the PowerShell prompt, run `claude`, `codex`, or `kimi`.
+2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
+   `claude`, `codex`, or `kimi`.
 3. Inside an agent, verify that `omeety_terminal` and its 28 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
-4. Use the settings button to select PowerShell, cmd, pwsh, Git Bash, or a
-   custom shell executable.
+4. Use the settings button to select the system shell, zsh/bash/fish,
+   PowerShell/cmd/Git Bash, or a custom shell executable.
 
 ## Terminal shortcuts and features
 
@@ -217,8 +243,8 @@ browser input.
 
 | Symptom | Resolution |
 |---|---|
-| Terminal status remains disconnected | Run `install.ps1`, confirm the extension ID matches `allowed_origins`, and verify Node.js is installed. |
-| `omeety_terminal` is missing from `/mcp` | Run `install.ps1` again. For Codex, you can also run `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp`. |
+| Terminal status remains disconnected | Run the platform installer (`install.sh` on macOS, `install.ps1` on Windows), confirm the extension ID matches `allowed_origins`, and verify Node.js is installed. |
+| `omeety_terminal` is missing from `/mcp` | Run the installer again. For Codex, you can also run `codex mcp add omeety_terminal --url http://127.0.0.1:49171/mcp`. |
 | Codex or Kimi cannot connect to MCP | Confirm the URL is `http://127.0.0.1:49171/mcp` and inspect `~/.codex/config.toml` or `~/.kimi-code/config.toml`. |
 | The shell cannot find Claude, Codex, or Kimi | The host inherits PATH from the browser. Add the CLI directory to the system PATH and restart the browser, or use the full executable path. |
 | A small amount of old output is missing after reopening the panel | The session is still running, but Omeety only replays the most recent 64 KB. Continue typing; applications should persist any complete history they require. |
@@ -226,20 +252,28 @@ browser input.
 
 ## Uninstall
 
+macOS:
+
+```bash
+./installer/uninstall.sh
+```
+
+Windows:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\uninstall.ps1
 ```
 
-This removes the registry entries and the `omeety_terminal` blocks from agent
-configurations while preserving backups. Remove the unpacked extension from
-`edge://extensions` afterward.
+This removes the Native Messaging registration and the `omeety_terminal`
+blocks from agent configurations while preserving backups. Remove the unpacked
+extension from the browser's extension management page afterward.
 
 ## Project layout
 
 ```text
 extension/    MV3 extension: terminal, Native Messaging port, and content tools
 host/         Native Messaging host: PTY + Streamable HTTP MCP + legacy SSE
-installer/    install.ps1 and uninstall.ps1
+installer/    Windows PowerShell and macOS zsh install/uninstall scripts
 shared/       Protocol documentation
 tools/        gen-key.js for a fixed extension key and ID
 _test/        Browser-free mock-native smoke tests
@@ -254,8 +288,12 @@ _pwtest/      Headed Edge regression probes safe for public reproduction
   panel closes, with only the most recent 64 KB of output buffered. Exiting the
   browser, reloading the extension, a Native Messaging host crash, or OS
   reclamation still ends the sessions.
-- Only Windows ConPTY has been verified. macOS and Linux require adapting the
-  shell selection in `pty.js`.
+- Windows ConPTY and macOS Chrome with a zsh PTY have been verified. Linux has
+  not yet completed a headed-browser regression pass.
+- Safari is not currently supported. It lacks the Chromium combination of
+  `sidePanel`, `offscreen`, and `chrome.debugger`/CDP, and its Native Messaging
+  bridge must go through a containing macOS app. A Safari port therefore needs
+  a separate container app and browser adapter instead of loading this folder directly.
 - Codex cursor and Chinese IME compatibility in browser side-panel terminals is
   tracked in [openai/codex#35438](https://github.com/openai/codex/issues/35438).
 - Except for reviewed public images under `docs/images`, local private keys,

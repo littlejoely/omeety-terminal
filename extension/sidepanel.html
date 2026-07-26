@@ -41,13 +41,17 @@
 
       <label>Shell（终端用的命令行）</label>
       <select id="shellSelect">
-        <option value="powershell">PowerShell（默认）</option>
-        <option value="cmd">CMD</option>
-        <option value="pwsh">PowerShell 7 (pwsh，若已装)</option>
-        <option value="gitbash">Git Bash（若已装 Git）</option>
+        <option value="auto">系统默认 Shell</option>
+        <option value="zsh" data-platform="unix">zsh（macOS 默认）</option>
+        <option value="bash" data-platform="unix">bash</option>
+        <option value="fish" data-platform="unix">fish（若已安装）</option>
+        <option value="powershell" data-platform="windows">PowerShell</option>
+        <option value="cmd" data-platform="windows">CMD</option>
+        <option value="pwsh" data-platform="windows">PowerShell 7 (pwsh，若已装)</option>
+        <option value="gitbash" data-platform="windows">Git Bash（若已装 Git）</option>
         <option value="custom">自定义路径…</option>
       </select>
-      <input id="shellCustom" type="text" placeholder="如 C:\\Program Files\\PowerShell\\7\\pwsh.exe" hidden />
+      <input id="shellCustom" type="text" placeholder="如 /bin/zsh" hidden />
 
       <label>MCP 端口</label>
       <input id="mcpPort" type="text" value="49171" readonly />
@@ -66,9 +70,9 @@
       <details class="help">
         <summary>怎么用</summary>
         <ol>
-          <li>装好本地 host（项目 <code>installer/install.ps1</code>）。</li>
+          <li>装好本地 host（macOS：<code>installer/install.sh</code>；Windows：<code>installer/install.ps1</code>）。</li>
           <li>这里就是个真终端，敲 <code>claude</code> / <code>codex</code> / <code>kimi</code> 即可；它们已自动连上浏览器工具。</li>
-          <li>在 agent 里说"描述当前网页"→ 它会读取你当前 Edge 标签页。</li>
+          <li>在 agent 里说"描述当前网页"→ 它会读取你当前 Chrome/Edge 标签页。</li>
           <li>快捷键：<code>Ctrl+F</code> 搜索输出 · <code>Ctrl+点击</code> 开链接 · <code>Ctrl+滚轮</code> 调字号 · <code>Ctrl+Alt+T/W/←/→</code> 新建/关闭/切换终端 tab。</li>
           <li>tab 标题会随 shell 自动改名（PowerShell/bash 的标题命令）；右键 tab 可手动重命名，手动后不再被自动覆盖。</li>
         </ol>
