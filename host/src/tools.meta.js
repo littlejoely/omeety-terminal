@@ -214,7 +214,13 @@ export const TOOLS = [
   {
     name: "omeety_get_user_pick",
     description:
-      "Return the element the user selected with the sidebar 📌 选取 picker (click pick button → click an element on the page). Call this when the user says they 'selected / picked / 选中' an element. Returns {uid:'pick', tag, role, text, selector, bbox, url} or {pick:null}. To act on the picked element, call omeety_click/fill/type_text with uid:'pick'.",
+      "Return the most recently selected element from the sidebar picker (backward-compatible single-pick view). Returns uid:'pick-N' plus tag/role/text/selector/bbox/url, or {pick:null}. To act on all selected elements, prefer omeety_get_user_picks.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "omeety_get_user_picks",
+    description:
+      "Return all elements from the user's latest completed continuous selection. The user clicks sidebar 选取, clicks multiple page elements, then presses Enter or clicks 完成选取. Returns {count,picks:[{uid:'pick-1'..,tag,role,text,label,type,href,selector,bbox,url}]}. Pass each uid to omeety_click/fill/type_text/select/hover.",
     inputSchema: { type: "object", properties: {} },
   },
   {

@@ -30,6 +30,8 @@ _pwtest/*
 !_pwtest/test_tab_render_budget.py
 !_pwtest/test_paste_protocol.py
 !_pwtest/test_context_bundle.py
+!_pwtest/test_performance_baseline.py
+!_pwtest/test_multi_pick.py
 !_pwtest/capture_launch_assets.py
 !_pwtest/launch_demo_agent.mjs
 

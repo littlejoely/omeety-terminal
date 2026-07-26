@@ -55,5 +55,5 @@ host 侧拆成标准 MCP `image` content，并在 JSON 中保留占位标记，�
 - native host：`com.omeety.terminal`
 - 扩展 ID（manifest key 固定）：`fjhjkmpldbepgcpfkhpolnnheccjaamg`
 - MCP server 名 / 各 agent 配置里的 id：`omeety_terminal`
-- 工具前缀：`omeety_*`（31 个）
+- 工具前缀：`omeety_*`（32 个）
 - MCP 端口：`49171`（Streamable HTTP：`http://127.0.0.1:49171/mcp`）

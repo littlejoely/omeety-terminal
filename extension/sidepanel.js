@@ -59,6 +59,23 @@ function send(msg) {
   }
 }
 
+function formatPickedContext(picks) {
+  const items = picks.slice(0, 20).map((pick) => {
+    const kind = pick.role || pick.tag || "element"
+    const text = String(pick.text || pick.label || "").replace(/\s+/g, " ").trim().slice(0, 48)
+    return `${pick.uid} ${kind}${text ? ` ${JSON.stringify(text)}` : ""}`
+  })
+  return `[Omeety selected ${picks.length} web elements: ${items.join("; ")}. Call omeety_get_user_picks for full selector/bbox/url]`
+}
+
+function injectPickedContext(picks) {
+  if (!activeSid || !picks.length) return
+  // 只写可打印文本、不带换行：在 Agent TUI 中等价于粘贴上下文；即使当前
+  // 是普通 shell，也只会进入编辑行而不会意外执行命令。
+  send({ type: "input", sid: activeSid, data: formatPickedContext(picks) })
+  tabs.get(activeSid)?.term?.focus()
+}
+
 // ---------- tab 管理（多终端，每个 tab 一个独立 PTY，靠 sid 区分）----------
 // 字号改动防抖落盘（500ms 合并连续 Ctrl+滚轮），下次开面板还是上次的字号
 let fontSizeSaveTimer = null
@@ -340,9 +357,19 @@ function connectPanel() {
       } else if (msg.state === "mcp_error") {
         setStatus("err", msg.msg || "MCP 错误")
       }
+    } else if (msg?.type === "pick_progress") {
+      setStatus("ok", `已选 ${msg.count || 0} 个；继续点选，Enter 或点「完成选取」`)
+      const pb = $("pickBtn")
+      pb.textContent = "完成选取"
+      pb.classList.add("danger")
     } else if (msg?.type === "pick_result") {
-      const p = msg.pick
-      setStatus("ok", p ? `已选取：${(p.text || p.tag || "").slice(0, 10)}` : "选取已取消")
+      const picks = Array.isArray(msg.picks) ? msg.picks : msg.pick ? [msg.pick] : []
+      if (picks.length) {
+        injectPickedContext(picks)
+        setStatus("ok", `已选取 ${picks.length} 个元素，并写入当前终端输入框`)
+      } else {
+        setStatus("ok", msg.cancelled ? "选取已取消" : "没有选取元素")
+      }
       const pb = $("pickBtn")
       pb.textContent = "选取"
       pb.classList.remove("danger") // 选取结束（选中/Esc取消/点取消）都恢复非红态
@@ -422,13 +449,13 @@ $("ackBtn").addEventListener("click", async () => {
 })
 
 $("pickBtn").addEventListener("click", () => {
-  send({ type: "start_pick" }) // content 端 toggle：未选取→进入选取；选取中→取消
+  send({ type: "start_pick" }) // content 端 toggle：未选取→进入；选取中→完成
   const btn = $("pickBtn")
   const entering = !btn.classList.contains("danger") // danger = 选取中
-  btn.textContent = entering ? "取消选取" : "选取"
+  btn.textContent = entering ? "完成选取" : "选取"
   btn.classList.toggle("danger", entering)
-  if (entering) setStatus("ok", "选取模式：切到网页点一下目标元素（再点本按钮/Esc 取消）")
-  else setStatus("ok", "取消选取中…")
+  if (entering) setStatus("ok", "连续选取：到网页点多个元素；Enter/本按钮完成，Esc 取消")
+  else setStatus("ok", "正在完成选取…")
 })
 
 $("tabNew").addEventListener("click", () => newTab())
@@ -489,7 +516,7 @@ $("saveBtn").addEventListener("click", async () => {
 
 // 工具按类别分组渲染（结构化，便于查看）。name 不在下列表里的归"其他"。
 const TOOL_CATEGORIES = [
-  { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_pick", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
+  { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_pick", "omeety_get_user_picks", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
   { title: "动作事务 / 元素操作", names: ["omeety_act_and_verify", "omeety_click", "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select", "omeety_hover", "omeety_scroll"] },
   { title: "等待", names: ["omeety_wait_for"] },
   { title: "性能 / 诊断", names: ["omeety_get_runtime_metrics"] },

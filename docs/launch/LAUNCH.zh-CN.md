@@ -29,7 +29,7 @@
 
 - Windows ConPTY 真实终端与多终端标签页；
 - 侧栏关闭后的会话保活与近期输出回放；
-- 31 个 MCP 浏览器工具；
+- 32 个 MCP 浏览器工具；
 - 页面快照、稳定元素 UID、元素选取、截图、Console、跨导航等待；
 - CDP 真实输入、文件上传和可回滚页面预览；
 - Codex、Claude Code、Kimi Code 配置自动写入；
@@ -44,7 +44,7 @@ GitHub：https://github.com/littlejoely/omeety-terminal
 
 开源了 Omeety Terminal：Edge/Chrome 侧栏里的真实本地终端，也是 Codex、
 Claude Code、Kimi Code 等 CLI Agent 的浏览器外骨骼。不同 Agent 共用当前网页的
-同一双眼睛和手，31 个 MCP 工具，本地桥接，MIT 开源。目前支持 Windows 与 macOS Chrome。
+同一双眼睛和手，32 个 MCP 工具，本地桥接，MIT 开源。目前支持 Windows 与 macOS Chrome。
 
 https://github.com/littlejoely/omeety-terminal
 

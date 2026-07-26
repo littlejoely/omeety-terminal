@@ -17,6 +17,10 @@ the scripts from this directory with Python and Playwright installed.
   Cmd+V and right-click deliver long content once as one bracketed-paste event.
 - `test_context_bundle.py` verifies Context Bundle v1, real Shadow DOM and
   same-origin iframe discovery, incremental snapshots, and compound postconditions.
+- `test_performance_baseline.py` records idle main-thread cost, real PTY output
+  throughput, JS heap/DOM size, and xterm/WebGL cleanup after terminal-tab churn.
+- `test_multi_pick.py` continuously selects multiple real page elements, proves
+  their clicks are intercepted, and verifies context injection into the PTY.
 - `test_cursor_probe.py` contains shared setup and cursor-state inspection.
 - `test_browser_tool_reliability.py` uses a temporary profile and local strict-CSP
   pages to verify CDP `execute_js` and click/wait recovery across navigation. It

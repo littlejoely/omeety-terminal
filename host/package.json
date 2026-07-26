@@ -7,8 +7,9 @@
   "main": "src/index.js",
   "scripts": {
     "postinstall": "node scripts/fix-node-pty-permissions.cjs",
-    "test": "npm run test:runtime && npm run test:log && npm run test:smoke",
+    "test": "npm run test:runtime && npm run test:replay && npm run test:log && npm run test:smoke",
     "test:runtime": "node ../_test/extension-runtime-regression.mjs",
+    "test:replay": "node ../_test/output-replay-buffer.mjs",
     "test:log": "node ../_test/log-rotation.mjs",
     "test:smoke": "node ../_test/mock-native.mjs"
   },

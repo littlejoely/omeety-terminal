@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
-[![MCP tools: 31](https://img.shields.io/badge/MCP_tools-31-5ee7b1?style=flat-square)](#browser-tools-31)
+[![MCP tools: 32](https://img.shields.io/badge/MCP_tools-32-5ee7b1?style=flat-square)](#browser-tools-32)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
 terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
 and any MCP-capable CLI the same eyes and hands for your active web page.**
 
 [3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
-[How it works](#how-it-works) · [31 browser tools](#browser-tools-31) ·
+[How it works](#how-it-works) · [32 browser tools](#browser-tools-32) ·
 [Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
 ![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
 
 > This reproducible demo uses a deterministic local MCP client and the real
 > extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
-> and Kimi Code use the same 31 tools. No model account or prerecorded model
+> and Kimi Code use the same 32 tools. No model account or prerecorded model
 > response is involved.
 
 There is no dedicated chat mode or model switch. Omeety remains a real shell:
@@ -69,7 +69,9 @@ Then:
 1. Open `chrome://extensions` or `edge://extensions`, enable **Developer mode**, and choose **Load unpacked**.
 2. Select the repository's `extension` directory.
 3. Open Omeety from the toolbar and run `codex`, `claude`, or `kimi` in the real terminal.
-4. Ask the agent to **“describe the current page”**, or use **Pick** and tell it what to do with the selected element.
+4. Ask the agent to **“describe the current page”**, or click **Pick**, select
+   multiple elements, then press Enter/click **Finish picking**. Omeety inserts
+   the context into the current agent input line.
 
 Continue below for the full installation model, configuration locations, and
 uninstall steps, or download the [latest Release](https://github.com/littlejoely/omeety-terminal/releases/latest).
@@ -118,10 +120,11 @@ another closed agent:
 5. Add permission groups, read-only mode, and domain boundaries as optional
    safety layers rather than model-specific policy.
 
-The immediate priority remains **reliability**: terminal I/O and browser tools
-must report real outcomes, trustworthy failures, and survive navigation.
-Context Bundle v1 and post-action verification are now implemented; continuous
-multi-selection, cross-origin iframe fallbacks, and finer network telemetry are next.
+The immediate priorities are **reliability and measurable performance**:
+terminal I/O and browser tools must report real outcomes, survive navigation,
+and retain their resource/throughput baseline. Continuous selection, Context
+Bundle v1, and post-action verification are implemented; cross-origin iframe
+fallbacks and finer network telemetry are next.
 
 ## How it works
 
@@ -198,7 +201,7 @@ Then load the extension:
    that a real terminal has full local user permissions.
 2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
    `claude`, `codex`, or `kimi`.
-3. Inside an agent, verify that `omeety_terminal` and its 31 `omeety_*` tools
+3. Inside an agent, verify that `omeety_terminal` and its 32 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
 4. Use Settings to select a shell, configure per-tab scrollback, and choose the
    session policy used after the side panel closes.
@@ -224,15 +227,18 @@ Then load the extension:
   clipboard.
 - PTYs advertise `xterm-256color` and True Color so Codex, Claude, and Kimi can
   render their full-color terminal interfaces.
+- **Continuous picking:** click Pick, select several page elements (click one
+  again to remove it), then press Enter or Finish picking. Stable `pick-1..N`
+  references and a compact summary are inserted without an Enter keystroke.
 
-## Browser tools (31)
+## Browser tools (32)
 
 **Inspect and retrieve:** `omeety_get_context_bundle` (structured element
 context plus cropped image), `omeety_get_page_snapshot` (stable UIDs and
 incremental updates), `omeety_get_selected_context`,
 `omeety_capture_visible_tab`, `omeety_fetch_with_cookie`,
-`omeety_get_user_pick`, `omeety_list_tabs`, `omeety_get_console_logs`, and
-`omeety_get_runtime_metrics`.
+`omeety_get_user_pick`, `omeety_get_user_picks`, `omeety_list_tabs`,
+`omeety_get_console_logs`, and `omeety_get_runtime_metrics`.
 
 **Operate:** `omeety_act_and_verify` (action plus postcondition transaction),
 `omeety_click`, `omeety_click_text`, `omeety_click_at`,
