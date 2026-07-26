@@ -81,7 +81,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   cursor: pointer;
   white-space: nowrap;
   max-width: 160px;
-  min-width: 20px;     /* 收缩铺满，但保持最小可点宽度 20px（再窄就触发横向滚动） */
+  min-width: 60px;     /* 保留安全的标签切换区域；再窄时改用横向滚动，避免误触关闭按钮 */
   overflow: hidden;
 }
 .tab.active { background: #000; color: var(--fg); }
