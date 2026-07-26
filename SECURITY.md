@@ -8,9 +8,10 @@ your user account.
 - The MCP server binds to `127.0.0.1`; do not expose its port to other machines.
 - Keep `tools/omeety-key.pem` private. It is local signing material and is not
   required to install the published source.
-- Do not publish generated browser profiles, host logs, screenshots, agent
-  configuration backups, or `host/host-manifest.json`; they may contain local
-  paths, account data, or session information.
+- Do not publish generated browser profiles, host logs, unreviewed diagnostic
+  screenshots, agent configuration backups, or `host/host-manifest.json`; they
+  may contain local paths, account data, or session information. Only reviewed
+  public images belong under `docs/images`.
 - Browser actions that submit, save, delete, or perform non-GET requests require
   explicit confirmation in the extension.
 

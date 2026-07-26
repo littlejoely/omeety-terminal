@@ -28,6 +28,7 @@ _pwtest/*
 # Logs, screenshots, backups, and editor/OS state
 *.log
 *.png
+!docs/images/omeety-terminal.png
 *.jpg
 *.jpeg
 *.bak

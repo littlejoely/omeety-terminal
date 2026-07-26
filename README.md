@@ -1,9 +1,13 @@
 # Omeety Terminal
 
+**简体中文** | [English](README.en.md)
+
 浏览器（Edge/Chrome）侧栏里的**真·终端**，并且**预接浏览器操控 MCP**：在里面敲 `claude` / `codex` / `kimi`（或任何支持 MCP 的 CLI），它们就**自动能看见并操作你当前打开的网页**。
 
 这是一个自行开发的实验性项目，不是 OpenAI、Anthropic、Moonshot AI、
 Microsoft 或 xterm.js 的官方产品。
+
+![Omeety Terminal 在 Microsoft Edge 侧栏中运行](docs/images/omeety-terminal.png)
 
 没有切换按钮——它就是个真实 shell（PowerShell/cmd/自定义），想跑啥敲啥（`git`、`npm`、`claude`、`codex`、`kimi`…）。浏览器工具在安装时一次性写进各 AI 的配置，所以"开箱即用"。
 
@@ -108,5 +112,11 @@ _pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
 - 仅 Windows 验证（ConPTY）；macOS/Linux 理论可行（改 `pty.js` 的 shell 选择即可）。
 - Codex 在浏览器侧栏终端中的光标/中文 IME 兼容性跟踪：
   [openai/codex#35438](https://github.com/openai/codex/issues/35438)。
-- 本地私钥、浏览器 Profile、日志、截图和安装器生成文件均不会提交；详见
+- 除 `docs/images` 中经审查的公开图片外，本地私钥、浏览器 Profile、日志、
+  调试截图和安装器生成文件均不会提交；详见
   [`SECURITY.md`](SECURITY.md)。
+
+## 开源协议
+
+Omeety Terminal 使用 [MIT License](LICENSE) 开源。项目包含的第三方组件保留
+各自的版权和许可声明，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
