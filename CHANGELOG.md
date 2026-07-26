@@ -4,6 +4,36 @@ All notable public changes to Omeety Terminal are recorded here.
 
 Omeety Terminal 的重要公开变更记录在此处。
 
+## [0.1.1] - 2026-07-26
+
+macOS Chrome support / macOS Chrome 支持。
+
+### Added / 新增
+
+- Verified macOS support in Google Chrome with a real zsh PTY.
+- Added macOS install and uninstall scripts that register Native Messaging for
+  Chrome, Edge, or Chromium and configure Codex CLI, Claude Code, and Kimi Code.
+- Added automatic shell selection plus zsh, bash, fish, and custom executable
+  choices on macOS.
+- Added macOS PATH discovery for Homebrew, local user tools, Cargo, and Kimi.
+- Added macOS Developer Tools permission guidance for the native `node-pty`
+  module.
+
+### Fixed / 修复
+
+- Repair the executable bit of `node-pty`'s macOS `spawn-helper` after npm
+  installation when required.
+- Preserve existing LF or CRLF line endings when writing Agent TOML configs.
+- Use the user's home directory as the PTY working directory on macOS.
+- Avoid manifest references to icon files that are not present in the public
+  repository.
+
+### Compatibility / 兼容性
+
+- Verified on Windows 11 + Microsoft Edge and macOS + Google Chrome.
+- Safari is not included in this release because it requires a separate macOS
+  container app and browser adapter.
+
 ## [0.1.0] - 2026-07-26
 
 First public beta / 首个公开测试版。
@@ -44,4 +74,5 @@ First public beta / 首个公开测试版。
 - Codex cursor and Chinese IME punctuation compatibility in browser-hosted
   terminals is tracked in [openai/codex#35438](https://github.com/openai/codex/issues/35438).
 
+[0.1.1]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.0
