@@ -107,6 +107,18 @@ export function startMcpHttp({ port, nmSend }) {
     }
   })
 
+  // MCP 规范（Streamable HTTP）：服务器对 GET /mcp（客户端探测 SSE stream）和 DELETE /mcp
+  //（客户端结束 session）MUST 返回 405 Method Not Allowed + Allow: POST。
+  // 不能让 Express 默认回 404——否则客户端（Kimi Code / Claude Code 等）会在 initialize 之前
+  // 把 404 当"端点无效"而放弃握手，MCP 工具永不挂载、且日志无痕。stateless 模式不提供
+  // stream/session，故统一回 405，让客户端退回纯 POST 模式正常握手。
+  app.get("/mcp", (_req, res) => {
+    res.status(405).set("Allow", "POST").end()
+  })
+  app.delete("/mcp", (_req, res) => {
+    res.status(405).set("Allow", "POST").end()
+  })
+
   app.get("/sse", async (_req, res) => {
     const transport = new SSEServerTransport("/messages", res)
     const server = makeServer(nmSend, downloadManager)
