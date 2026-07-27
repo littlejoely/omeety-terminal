@@ -1,5 +1,34 @@
 // 浏览器工具的 JSON Schema（镜像 extension/content.js 与 background.js 契约）。MCP inputSchema 用。
 
+const EXPECTATION_SCHEMA = {
+  type: "object",
+  properties: {
+    selector: { type: "string" }, text: { type: "string" },
+    selectorGone: { type: "string" }, textGone: { type: "string" },
+    urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
+    valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+    match: { type: "string", enum: ["all", "any"], default: "all" },
+    timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
+  },
+}
+
+const TRANSACTION_STEP_SCHEMA = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select", "wait", "reload", "navigate", "evaluate"] },
+    uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
+    text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
+    cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" }, verify: { type: "boolean" },
+    refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+    commitKey: { type: "string", enum: ["Enter", "Tab"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 },
+    timeoutMs: { type: "integer", minimum: 500, maximum: 60000 }, settleMs: { type: "integer", minimum: 50, maximum: 5000 },
+    expect: EXPECTATION_SCHEMA,
+    url: { type: "string" }, bypassCache: { type: "boolean" },
+    code: { type: "string" }, world: { type: "string", enum: ["MAIN", "ISOLATED"] },
+  },
+  required: ["action"],
+}
+
 export const TOOLS = [
   {
     name: "omeety_get_page_snapshot",
@@ -110,29 +139,27 @@ export const TOOLS = [
   {
     name: "omeety_act_and_verify",
     description:
-      "Execute one browser action and verify its postcondition as a single transaction. Supports click/click_text/fill/type/press/select, preserves dangerous-action confirmation, can use real CDP input, survives reload/navigation while waiting, and returns before/after state plus timing. Provide expect for strong verification; fill/type/select infer a value postcondition automatically. Without expect, verification is weaker and only checks an observed page/target state change.",
+      "Run one verified browser action, or a pinned multi-step transaction in one MCP round trip. Pass tabId so user tab switches cannot redirect the work. Single-action mode supports click/click_text/fill/type/press/select. Transaction mode accepts 1-20 steps and additionally supports wait/reload/navigate/evaluate, stops on the first semantic failure by default, and returns per-step timing/results; always check completed and failedStep. Low-level steps default to no extra verification unless expect/verify is supplied; use evaluate assertions or explicit postconditions for accuracy.",
     inputSchema: {
       type: "object",
       properties: {
+        tabId: { type: "integer", description: "Pin the whole action/transaction to this browser tab even if the user switches tabs" },
         action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select"] },
         uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
         text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
         cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" },
+        refocus: { type: "boolean", description: "Set false to keep the current focused editor instead of clicking uid/selector/x,y again" },
+        inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+        commitKey: { type: "string", enum: ["Enter", "Tab"] },
+        clickCount: { type: "integer", minimum: 1, maximum: 3 },
+        verify: { type: "boolean", description: "Set false to dispatch a single action without an extra before/wait/after verification pass" },
         timeoutMs: { type: "integer", minimum: 500, maximum: 60000, default: 8000 },
         settleMs: { type: "integer", minimum: 50, maximum: 2000, default: 250 },
-        expect: {
-          type: "object",
-          properties: {
-            selector: { type: "string" }, text: { type: "string" },
-            selectorGone: { type: "string" }, textGone: { type: "string" },
-            urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
-            valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
-            match: { type: "string", enum: ["all", "any"], default: "all" },
-            timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
-          },
-        },
+        expect: EXPECTATION_SCHEMA,
+        steps: { type: "array", minItems: 1, maxItems: 20, items: TRANSACTION_STEP_SCHEMA },
+        stopOnError: { type: "boolean", default: true },
       },
-      required: ["action"],
+      anyOf: [{ required: ["action"] }, { required: ["steps"] }],
     },
   },
   {
@@ -147,25 +174,25 @@ export const TOOLS = [
   },
   {
     name: "omeety_click_at",
-    description: "Click at viewport coordinate (x,y). Dangerous target labels require confirmation. Set cdp:true to use a REAL CDP mouse click (chrome.debugger Input.dispatchMouseEvent, isTrusted=true) — needed when the target needs a real cursor/focus to activate (Feishu/Lark search box, contenteditable rich-text editor). Leaves a '正在调试此浏览器' yellow bar.",
+    description: "Click at viewport coordinate (x,y). Dangerous target labels require confirmation. Set cdp:true to use a REAL CDP mouse click (chrome.debugger Input.dispatchMouseEvent, isTrusted=true); clickCount:2 supports Canvas/grid double-click editing. Leaves a '正在调试此浏览器' yellow bar.",
     inputSchema: {
       type: "object",
-      properties: { x: { type: "number" }, y: { type: "number" }, confirmed: { type: "boolean" }, cdp: { type: "boolean" } },
+      properties: { x: { type: "number" }, y: { type: "number" }, confirmed: { type: "boolean" }, cdp: { type: "boolean" }, clickCount: { type: "integer", minimum: 1, maximum: 3 } },
       required: ["x", "y"],
     },
   },
   {
     name: "omeety_fill",
-    description: "Replace the value of a form field by uid (preferred) or selector (dispatches input+change). Set cdp:true to fill via REAL CDP Input.insertText (native CJK/emoji; clears the field first via Ctrl+A+Backspace) — for rich-text editors (Feishu Lark EditorKit/ProseMirror/Slate) whose model ignores synthetic events. Target must be focused first. Leaves a yellow bar.",
+    description: "Replace a form field. With cdp:true, inputMode:'insertText' preserves CJK; inputMode:'keyEvents' sends trusted per-character ASCII/numeric keys for Canvas/controlled grids. Set refocus:false when the transient editor is already focused, and optionally commitKey:'Enter'|'Tab'. Clearing uses Cmd+A on macOS and Ctrl+A elsewhere. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
-      properties: { uid: { type: "string" }, selector: { type: "string" }, value: { type: "string" }, cdp: { type: "boolean" } },
+      properties: { uid: { type: "string" }, selector: { type: "string" }, value: { type: "string" }, cdp: { type: "boolean" }, refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents"] }, commitKey: { type: "string", enum: ["Enter", "Tab"] } },
       required: ["value"],
     },
   },
   {
     name: "omeety_type_text",
-    description: "Type/append text into an editable element resolved by uid (preferred), selector, or x,y. Set cdp:true to type via REAL CDP Input.insertText (native CJK/emoji support — dispatchKeyEvent char mangles CJK like '杨琪'; falls back to char only if insertText unavailable) for rich-text editors whose model ignores synthetic events. CDP mode defaults to clear (Ctrl+A+Backspace first → replace semantics, safe to call repeatedly); pass clear:false to append. Target must be focused first (e.g. omeety_click_at cdp:true). Leaves a yellow bar.",
+    description: "Type/append text into an editable target. With cdp:true, inputMode:'insertText' preserves CJK; inputMode:'keyEvents' sends trusted keydown/char/keyup sequences for ASCII/numeric Canvas editors. Set refocus:false to keep an already-focused transient editor, clear:false to append, and commitKey:'Enter'|'Tab' for atomic grid edits. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
       properties: {
@@ -176,16 +203,19 @@ export const TOOLS = [
         y: { type: "number" },
         clear: { type: "boolean" },
         cdp: { type: "boolean" },
+        refocus: { type: "boolean" },
+        inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+        commitKey: { type: "string", enum: ["Enter", "Tab"] },
       },
       required: ["text"],
     },
   },
   {
     name: "omeety_press_key",
-    description: "Dispatch keydown/keyup for a key (e.g. Enter, Tab, Backspace) on a target (uid/selector/x,y). Set cdp:true to use a REAL CDP keypress (Input.dispatchKeyEvent, isTrusted=true) — needed to trigger rich-text editor shortcuts/submit (e.g. Feishu chat box Enter to send, which ignores synthetic keydown). Leaves a yellow bar.",
+    description: "Dispatch a key on a target. With cdp:true, named keys use trusted keydown/up and printable characters use trusted keydown/char/keyup with correct KeyA/Digit1 codes. Set refocus:false to keep the current focused editor. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
-      properties: { key: { type: "string" }, uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" }, cdp: { type: "boolean" } },
+      properties: { key: { type: "string" }, uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" }, cdp: { type: "boolean" }, refocus: { type: "boolean" } },
       required: ["key"],
     },
   },
@@ -267,7 +297,7 @@ export const TOOLS = [
   },
   {
     name: "omeety_navigate",
-    description: "Navigate the CURRENT active tab to a new http(s) URL (same tab, not a new one). Navigation is async — call omeety_wait_for (or omeety_get_page_snapshot) to confirm the target page loaded before acting.",
+    description: "Navigate a tab to a new http(s) URL (defaults to the active tab; pass tabId to pin it). Navigation is async — call omeety_wait_for with the same tabId, or use an act_and_verify transaction, before acting.",
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
   },
   {
@@ -283,7 +313,7 @@ export const TOOLS = [
   {
     name: "omeety_execute_js",
     description:
-      "Escape hatch: execute arbitrary JavaScript in the active page's MAIN world through CDP Runtime.evaluate (works on strict-CSP pages that block unsafe-eval). It can read/write page variables, call page functions, and await async logic; code runs as an async function body, so use `return` for the value. world:'ISOLATED' creates an isolated execution world. Use for anything the dedicated tools don't cover. The return value is stringified and truncated at 200KB. Attaching CDP may show the browser's debugging banner. Dangerous code requires confirmed:true.",
+      "Escape hatch: execute arbitrary JavaScript in a pinned tab's MAIN world through CDP Runtime.evaluate (defaults to the active tab and works on strict-CSP pages). It can read/write page variables, call page functions, and await async logic; use `return` for the value. world:'ISOLATED' creates an isolated world. Prefer dedicated tools or a multi-step act_and_verify transaction. Output is truncated at 200KB. Attaching CDP may show a debugging banner. Dangerous code requires confirmed:true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -312,7 +342,7 @@ export const TOOLS = [
   {
     name: "omeety_wait_for",
     description:
-      "Wait for one or all page postconditions: selector/text appears, selector/text disappears, URL/title contains, target value equals/includes, or checked state. Polls every 200ms and survives reload, navigation, and BFCache. Defaults to any condition; match:'all' requires every condition.",
+      "Wait for one or all page postconditions in a pinned tab: selector/text appears, selector/text disappears, URL/title contains, target value equals/includes, or checked state. Polls every 200ms and survives reload, navigation, BFCache, and user tab switches when tabId is supplied. Defaults to any condition; match:'all' requires every condition.",
     inputSchema: {
       type: "object",
       properties: {
@@ -362,3 +392,23 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { taskId: { type: "string" } }, required: ["taskId"] },
   },
 ]
+
+// 长事务必须能锁定页面，不能因用户中途切 tab 而转向另一个网页。
+// 截图不在此列：chrome.tabs.captureVisibleTab 只能截窗口的活动 tab，伪装成可后台锁定会产生错图。
+const PINNABLE_BROWSER_TOOLS = new Set([
+  "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_fetch_with_cookie",
+  "omeety_apply_preview_patch", "omeety_rollback_preview_patch", "omeety_click", "omeety_act_and_verify",
+  "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key",
+  "omeety_select", "omeety_scroll", "omeety_get_user_pick", "omeety_get_user_picks", "omeety_upload_file",
+  "omeety_navigate", "omeety_reload", "omeety_go_back", "omeety_execute_js", "omeety_get_console_logs",
+  "omeety_wait_for", "omeety_hover",
+])
+
+for (const tool of TOOLS) {
+  if (!PINNABLE_BROWSER_TOOLS.has(tool.name)) continue
+  tool.inputSchema.properties ||= {}
+  tool.inputSchema.properties.tabId ||= {
+    type: "integer",
+    description: "Operate this exact browser tab even if the user switches the active tab during the task",
+  }
+}

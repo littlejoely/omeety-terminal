@@ -56,5 +56,5 @@ host 侧拆成标准 MCP `image` content，并在 JSON 中保留占位标记，�
 - native host：`com.omeety.terminal`
 - 扩展 ID（manifest key 固定）：`fjhjkmpldbepgcpfkhpolnnheccjaamg`
 - MCP server 名 / 各 agent 配置里的 id：`omeety_terminal`
-- 工具前缀：`omeety_*`（35 个：32 个浏览器工具 + 3 个本地下载工具）
+- 工具前缀：`omeety_*`（35 个：32 个浏览器工具 + 3 个本地下载工具）。支持的浏览器工具可用 `tabId` 锁定目标；`omeety_act_and_verify.steps` 可在一次调用中执行 1–20 步失败即停事务。
 - MCP 端口：`49171`（主 URL：`http://127.0.0.1:49171/mcp`；兼容 SSE：`http://127.0.0.1:49171/sse`）

@@ -197,6 +197,15 @@ Code、Kimi Code 等 Agent 自动使用同一套工具契约。
 
 危险操作（提交/保存/删除/同意类点击、非 GET 请求）会自动弹浏览器确认框，需你同意才执行。富文本编辑器（飞书等）合成事件不认时，给 `click_at`/`fill`/`type_text`/`press_key` 传 `cdp:true` 走真实输入。
 
+Canvas/受控表格的数字单元格可以先用 `click_at` 的 `clickCount:2` 进入编辑，再用
+`type_text` 的 `cdp:true, inputMode:"keyEvents", refocus:false, commitKey:"Enter"`
+在不重新点击瞬时隐藏输入框的情况下替换并提交数值。清空会建立选区并读回验证，必要时按剩余长度回退，不再把只删一位误报为成功。
+
+页面工具的结果会带回实际 `tabId`；长任务后续步骤建议复用并显式传入，这样用户中途切到其他标签页也不会改变操作目标，也无需额外调用 `list_tabs`。
+`omeety_act_and_verify` 还可接收 1–20 个 `steps`，在一次 MCP 调用内串行执行点击、输入、
+按键、等待、导航、刷新和 JavaScript 断言；默认首个语义失败即停止，并返回每步结果与耗时。
+适合把原来十几次工具往返压缩成一次可审计事务。
+
 ### 本地下载工具（3 个，MCP-first）
 
 - `omeety_download_start`：确认后创建持久化任务；自动探测直连/代理、按服务器能力并发分块、重试与断点续传，可选 SHA-256 校验。

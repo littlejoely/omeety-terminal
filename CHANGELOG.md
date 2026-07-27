@@ -4,6 +4,27 @@ All notable public changes to Omeety Terminal are recorded here.
 
 Omeety Terminal 的重要公开变更记录在此处。
 
+## [Unreleased]
+
+### Fixed / 修复
+
+- Let browser tools pin an explicit `tabId`, so a user's mid-task tab switch no
+  longer redirects a pending action or wait to the wrong page.
+- Extend `omeety_act_and_verify` with 1-20 step transactions. Click, trusted
+  input, navigation, reload, wait, and JavaScript assertions can now run in one
+  MCP round trip with fail-fast semantics and per-step results.
+- Verify editor clearing instead of treating one Backspace as success. Omeety
+  now establishes a DOM selection, dispatches trusted deletion, reads the active
+  editor back, and safely falls back to bounded per-character Backspace.
+- Count timeouts, failed postconditions, and incomplete transactions as semantic
+  failures in runtime reliability metrics.
+- Make trusted CDP editing reliable in Canvas and controlled grids: printable
+  ASCII/numeric input now uses correct `KeyA`/`Digit1` key codes and full
+  keydown/char/keyup sequences, transient editors can retain focus with
+  `refocus:false`, and `commitKey` can finish an edit atomically.
+- Use Cmd+A when clearing an editor on macOS and Ctrl+A on other platforms;
+  `clickCount` now supports double-click entry into grid editors.
+
 ## [0.1.2] - 2026-07-26
 
 Browser intelligence, terminal session, and resource lifecycle / 浏览器智能、终端会话与资源生命周期优化。
