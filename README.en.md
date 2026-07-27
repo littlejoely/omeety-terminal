@@ -265,6 +265,20 @@ in-page confirmation. For rich-text editors that ignore synthetic events, set
 `cdp: true` on `click_at`, `fill`, `type_text`, or `press_key` to use trusted
 browser input.
 
+For numeric cells in Canvas or controlled grids, first use `clickCount: 2` on
+`click_at` to enter edit mode. Then call `type_text` with `cdp: true`,
+`inputMode: "keyEvents"`, `refocus: false`, and `commitKey: "Enter"` to replace
+and commit the value without re-clicking a transient hidden input. Clearing uses
+a verified DOM selection plus trusted deletion, with a bounded Backspace
+fallback when a controlled editor rebuilds and loses its selection.
+
+Page tools return their actual `tabId`; reuse it to pin long-running work, so a
+user switching tabs cannot redirect later steps and no preliminary `list_tabs`
+call is needed. `omeety_act_and_verify` also accepts 1-20 `steps` and runs
+clicks, trusted input, keys, waits, navigation, reloads, and JavaScript
+assertions in one fail-fast MCP transaction with per-step results and timing.
+This compresses many model/tool round trips into one auditable call.
+
 ### Local download tools (3, MCP-first)
 
 - `omeety_download_start` creates a persistent task after confirmation. It can

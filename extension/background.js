@@ -5,6 +5,7 @@
 import { buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
 import { loadSettings } from "./storage.js"
 import { OutputReplayBuffer } from "./output-replay-buffer.js"
+import { getPrintableKeyDescriptor, getPrimaryModifier, normalizeCdpInputMode } from "./cdp-input.js"
 
 const NM_NAME = "com.omeety.terminal"
 
@@ -26,6 +27,14 @@ function recordToolMetric(name, ok, durationMs) {
   current.lastMs = durationMs
   current.lastAt = new Date().toISOString()
   toolMetrics.set(name, current)
+}
+
+function isSemanticToolSuccess(response) {
+  if (!response?.ok) return false
+  const result = response.result
+  if (!result || typeof result !== "object") return true
+  if (result.timeout === true || result.found === false || result.verified === false || result.completed === false) return false
+  return true
 }
 
 function getRuntimeMetrics() {
@@ -304,37 +313,99 @@ async function cdpMouseClick(tabId, x, y, clickCount = 1) {
   await chromeDebuggerSendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount })
 }
 
-// CDP 真实"全选 + 删除"，清空 contenteditable（触发富文本 model 重置 + 重渲染）。
-// 用于 CDP 输入前清场：合成输入的 DOM 残渣不会被富文本重渲染清掉，会越堆越多；
-// 真实 Ctrl+A+Backspace 能让 model 真正清空。
-async function cdpClearEditor(tabId) {
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Control", code: "ControlLeft", windowsVirtualKeyCode: 17 })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", key: "Control", code: "ControlLeft", windowsVirtualKeyCode: 17 })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 })
+async function cdpGetActiveEditorState(tabId, selectAll = false, moveCaretToEnd = false) {
+  const response = await chromeDebuggerSendCommand({ tabId }, "Runtime.evaluate", {
+    expression: `(()=>{const el=document.activeElement;if(!el)return{editable:false};const tag=(el.tagName||'').toLowerCase();const valueLike=tag==='input'||tag==='textarea';const rich=!!el.isContentEditable;if(!valueLike&&!rich)return{editable:false,tag};if(${selectAll ? "true" : "false"}){if(valueLike&&typeof el.select==='function')el.select();else if(rich){const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r)}}if(${moveCaretToEnd ? "true" : "false"}&&valueLike&&typeof el.setSelectionRange==='function'){const n=String(el.value??'').length;el.setSelectionRange(n,n)}const value=valueLike?String(el.value??''):String(el.textContent??'');return{editable:true,tag,rich,value,length:[...value].length,selectionStart:valueLike?el.selectionStart:null,selectionEnd:valueLike?el.selectionEnd:null}})()`,
+    returnByValue: true,
+  })
+  return response?.result?.value || { editable: false }
 }
 
-// 真实文本输入：优先 Input.insertText（一次性插入整段，原生支持 CJK/emoji），
-// 失败再退回逐字 dispatchKeyEvent char（ASCII 仍可用）。富文本（飞书 Lark EditorKit）
-// 靠真实按键更新内部 model；合成 input/InputEvent 它不认。
-// 关键：dispatchKeyEvent 的 char 路径不支持 BMP 外/CJK 多字节字符，"杨琪"会变成乱码符号，
-// 因此 CJK 必须走 insertText。clear=true（默认）时先 cdpClearEditor 清场，替换语义、不堆叠。
-async function cdpTypeText(tabId, text, clear = true) {
+async function cdpDispatchNamedKey(tabId, key) {
+  const code = key
+  const vkMap = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 46 }
+  const ev = { key, code, windowsVirtualKeyCode: vkMap[key] || 0 }
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...ev })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...ev })
+}
+
+// CDP 真实"全选 + 删除"：先直接建立 DOM 选区，再发送可信 Backspace。
+// 快捷键只作为兼容补充；每次都读回 active editor 验证，避免飞书瞬时数字输入框里
+// Cmd/Ctrl+A 没有全选时只删掉一位，却仍然返回成功。
+async function cdpClearEditor(tabId) {
+  const initial = await cdpGetActiveEditorState(tabId, true)
+  if (!initial.editable) return { verified: null, beforeLength: null, afterLength: null, reason: "active element is not inspectable as an editor" }
+  if (initial.length === 0) return { verified: true, beforeLength: 0, afterLength: 0 }
+
+  const platformResult = await chromeDebuggerSendCommand({ tabId }, "Runtime.evaluate", {
+    expression: "navigator.platform || navigator.userAgent || ''",
+    returnByValue: true,
+  }).catch(() => null)
+  const modifier = getPrimaryModifier(platformResult?.result?.value || "")
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...modifier })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: modifier.modifiers })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: modifier.modifiers })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...modifier })
+  // 快捷键事件可能改变选区，删除前再建立一次可验证的 DOM 选区。
+  await cdpGetActiveEditorState(tabId, true)
+  await cdpDispatchNamedKey(tabId, "Backspace")
+
+  let after = await cdpGetActiveEditorState(tabId)
+  if (after.editable && after.length > 0 && after.length <= 512) {
+    // 受控编辑器可能重渲染并丢失选区。把光标放到末尾后按实际剩余长度回退，
+    // 每个按键仍由页面自身的 input/model 链路处理，不直接改 value。
+    await cdpGetActiveEditorState(tabId, false, true)
+    for (let i = 0; i < after.length; i++) await cdpDispatchNamedKey(tabId, "Backspace")
+    after = await cdpGetActiveEditorState(tabId)
+  }
+  if (after.editable && after.length > 0) {
+    throw new Error(`CDP 清空未生效：编辑器仍剩 ${after.length} 个字符`)
+  }
+  return { verified: true, beforeLength: initial.length, afterLength: after.length || 0 }
+}
+
+async function cdpTypePrintableKey(tabId, char) {
+  const descriptor = getPrintableKeyDescriptor(char)
+  if (!descriptor) {
+    await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: char })
+    return "insertText"
+  }
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...descriptor })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", {
+    type: "char",
+    ...descriptor,
+    text: char,
+    unmodifiedText: char,
+  })
+  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...descriptor })
+  return "keyEvents"
+}
+
+// 真实文本输入：insertText 适合 CJK/emoji 与富文本；keyEvents 为 ASCII/数字逐字发出
+// rawKeyDown + char + keyUp，适合只认可信按键的 Canvas/受控表格编辑器。keyEvents 中的非 ASCII
+// 字符会单字回退到 insertText，避免 CJK 乱码。clear=true（默认）时先用平台主修饰键清场。
+async function cdpTypeText(tabId, text, clear = true, inputMode = "insertText") {
   await ensureCdpAttached(tabId)
+  let clearResult = null
   if (clear) {
-    try { await cdpClearEditor(tabId) } catch { /* 空编辑器/无选中，忽略 */ }
+    clearResult = await cdpClearEditor(tabId)
   }
   const s = String(text ?? "")
-  if (!s) return
+  if (!s) return { mode: normalizeCdpInputMode(inputMode), clearResult }
+  const mode = normalizeCdpInputMode(inputMode)
+  if (mode === "keyEvents") {
+    for (const ch of s) await cdpTypePrintableKey(tabId, ch)
+    return { mode, clearResult }
+  }
   try {
     await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: s })
+    return { mode, clearResult }
   } catch {
     // insertText 不被支持/失败时退回逐字 char（ASCII 可用；CJK 会乱码但好过完全不输入）
     for (const ch of s) {
       await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch })
     }
+    return { mode: "keyEvents", clearResult }
   }
 }
 
@@ -342,11 +413,11 @@ async function cdpTypeText(tabId, text, clear = true) {
 // （如飞书聊天框 Enter 发送 —— 合成 keydown 它不认）。
 async function cdpKeyPress(tabId, key) {
   await ensureCdpAttached(tabId)
-  const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
-  const vkMap = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27 }
-  const ev = { key, code, windowsVirtualKeyCode: vkMap[key] || 0 }
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...ev })
-  await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...ev })
+  if ([...key].length === 1) {
+    await cdpTypePrintableKey(tabId, key)
+    return
+  }
+  await cdpDispatchNamedKey(tabId, key)
 }
 
 // ---- CDP 工具的 安全门 / 自动聚焦 / 串行化 / 资源清理 基建 ----
@@ -441,24 +512,28 @@ async function execCdpTool(tabId, name, args) {
         throw new Error(`坐标(${cx},${cy})命中危险元素"${label.slice(0, 40)}"——需 confirmed:true 才执行（或先用 omeety_request_user_confirmation 让用户确认）`)
       }
     }
-    await cdpMouseClick(tabId, cx, cy, 1)
-    return { ok: true, result: { clicked: true, x: cx, y: cy, method: "cdp:Input.dispatchMouseEvent", tabId } }
+    const clickCount = Math.min(Math.max(Number(args.clickCount) || 1, 1), 3)
+    await cdpMouseClick(tabId, cx, cy, clickCount)
+    return { ok: true, result: { clicked: true, x: cx, y: cy, clickCount, method: "cdp:Input.dispatchMouseEvent", tabId } }
   }
   if (isType) {
     const ctext = name === "omeety_fill" ? String(args.value ?? "") : String(args.text ?? "")
     const clear = name === "omeety_fill" ? true : args.clear !== false
-    const pt = await cdpResolvePoint(tabId, args) // 自动聚焦：uid/selector/x,y → 先点一下
+    const refocus = args.refocus !== false
+    const pt = refocus ? await cdpResolvePoint(tabId, args) : null // Canvas 隐藏输入框已聚焦时不要重复点坐标
     if (pt) await cdpMouseClick(tabId, pt.x, pt.y, 1)
-    await cdpTypeText(tabId, ctext, clear)
-    return { ok: true, result: { typed: true, textLength: ctext.length, cleared: clear, focused: !!pt, method: "cdp:Input.insertText", tabId } }
+    const typed = await cdpTypeText(tabId, ctext, clear, args.inputMode)
+    const commitKey = ["Enter", "Tab"].includes(args.commitKey) ? args.commitKey : null
+    if (commitKey) await cdpKeyPress(tabId, commitKey)
+    return { ok: true, result: { typed: true, textLength: ctext.length, cleared: clear, clearVerified: typed.clearResult?.verified ?? null, refocused: !!pt, method: `cdp:Input.${typed.mode}`, committedWith: commitKey, tabId } }
   }
   if (isPress) {
     const ckey = String(args.key || "")
     if (!ckey) throw new Error("press_key 需要 key")
-    const pt = await cdpResolvePoint(tabId, args)
+    const pt = args.refocus === false ? null : await cdpResolvePoint(tabId, args)
     if (pt) await cdpMouseClick(tabId, pt.x, pt.y, 1)
     await cdpKeyPress(tabId, ckey)
-    return { ok: true, result: { pressed: true, key: ckey, focused: !!pt, method: "cdp:Input.dispatchKeyEvent", tabId } }
+    return { ok: true, result: { pressed: true, key: ckey, refocused: !!pt, method: "cdp:Input.dispatchKeyEvent", tabId } }
   }
   throw new Error("未知 CDP 工具：" + name)
 }
@@ -493,13 +568,31 @@ if (chrome.debugger?.onDetach) {
 }
 
 // ---------- tool_call 路由 ----------
+async function resolveToolTab(args = {}) {
+  const requestedTabId = Number(args?.tabId)
+  if (Number.isInteger(requestedTabId) && requestedTabId > 0) {
+    return await chrome.tabs.get(requestedTabId)
+  }
+  return (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null
+}
+
+const TAB_CONTEXT_RESULT_TOOLS = new Set([
+  "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_get_context_bundle", "omeety_fetch_with_cookie",
+  "omeety_apply_preview_patch", "omeety_rollback_preview_patch", "omeety_click", "omeety_act_and_verify",
+  "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select",
+  "omeety_scroll", "omeety_capture_visible_tab", "omeety_upload_file", "omeety_navigate", "omeety_reload",
+  "omeety_go_back", "omeety_execute_js", "omeety_get_console_logs", "omeety_wait_for", "omeety_hover",
+])
+
 async function handleToolCall({ id, name, args }) {
   // 注意：tab 必须声明在 try 外——之前 const 在 try 块内，catch 里引用直接 ReferenceError，
   // 导致任何失败的工具调用连 tool_result 都发不出去，agent 端只能干等 60s 超时。
   let tab = null
   const toolStarted = performance.now()
   try {
-    tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null
+    // 工具可显式锁定 tabId。Agent 执行长事务时，即使用户切到其他页面，
+    // 后续步骤仍作用于原标签页，不再误等待/误点新的活动页。
+    tab = await resolveToolTab(args)
     let r
     if (name === "omeety_request_user_confirmation") {
       // 优先让 Omeety 自己的侧栏承载确认：下载管理器属于 host 本地工具，不应依赖当前网页
@@ -511,7 +604,9 @@ async function handleToolCall({ id, name, args }) {
       r = await buildContextBundle(tab.id, args)
     } else if (name === "omeety_act_and_verify") {
       if (!tab?.id) throw new Error("没有活动标签页")
-      r = await actAndVerify(tab.id, args)
+      r = Array.isArray(args?.steps)
+        ? await runSerial(tab.id, () => runActionTransaction(tab.id, args))
+        : await actAndVerify(tab.id, args)
     } else if (name === "omeety_get_runtime_metrics") {
       r = { ok: true, result: getRuntimeMetrics() }
     } else if (name === "omeety_capture_visible_tab") {
@@ -620,7 +715,12 @@ async function handleToolCall({ id, name, args }) {
     } else {
       r = await sendToContent(tab?.id, name, args)
     }
-    recordToolMetric(name, !!r?.ok, Math.round((performance.now() - toolStarted) * 10) / 10)
+    // 第一次页面操作就把真实 tabId 返给 Agent，后续可直接锁定，
+    // 无需为每个工作流先多调一次 list_tabs。
+    if (r?.ok && tab?.id && TAB_CONTEXT_RESULT_TOOLS.has(name) && r.result && typeof r.result === "object") {
+      r.result.tabId ??= tab.id
+    }
+    recordToolMetric(name, isSemanticToolSuccess(r), Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: !!r?.ok, result: r?.result, error: r?.error })
   } catch (e) {
     // CDP 状态自愈：若错误是 debugger 脱钩（tab 崩溃/用户手动取消调试/SW 重启后状态脏），
@@ -839,12 +939,19 @@ async function actAndVerify(tabId, args = {}) {
     ...(Number.isFinite(Number(args.x)) ? { x: Number(args.x) } : {}),
     ...(Number.isFinite(Number(args.y)) ? { y: Number(args.y) } : {}),
   }
-  const before = await sendToContent(tabId, "omeety_get_verification_state", target)
+  const verificationEnabled = args.verify !== false
+  const before = verificationEnabled
+    ? await sendToContent(tabId, "omeety_get_verification_state", target)
+    : { ok: true, result: null }
   const actionArgs = {
     ...target,
     ...(args.confirmed ? { confirmed: true } : {}),
     ...(args.backgroundTask ? { backgroundTask: true } : {}),
     ...(args.cdp ? { cdp: true } : {}),
+    ...(args.refocus === false ? { refocus: false } : {}),
+    ...(args.inputMode ? { inputMode: String(args.inputMode) } : {}),
+    ...(args.commitKey ? { commitKey: String(args.commitKey) } : {}),
+    ...(args.clickCount ? { clickCount: Number(args.clickCount) } : {}),
   }
   let toolName
   if (action === "click") {
@@ -871,9 +978,30 @@ async function actAndVerify(tabId, args = {}) {
   }
 
   let acted
-  if (isCdpTool(toolName, actionArgs)) acted = await runSerial(tabId, () => execCdpTool(tabId, toolName, actionArgs))
+  if (isCdpTool(toolName, actionArgs)) {
+    acted = args.__transactionSerialized
+      ? await execCdpTool(tabId, toolName, actionArgs)
+      : await runSerial(tabId, () => execCdpTool(tabId, toolName, actionArgs))
+  }
   else acted = await sendToContent(tabId, toolName, actionArgs)
   if (!acted.ok) return acted
+
+  if (!verificationEnabled) {
+    return {
+      ok: true,
+      result: {
+        action: { name: toolName, result: acted.result },
+        verified: null,
+        verificationStrength: "not-requested",
+        stateChanged: null,
+        expectation: null,
+        waited: null,
+        before: null,
+        after: null,
+        timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+      },
+    }
+  }
 
   const expectation = { ...(args.expect || {}) }
   if (action === "fill" || action === "select") expectation.valueEquals ??= String(args.value ?? "")
@@ -912,6 +1040,105 @@ async function actAndVerify(tabId, args = {}) {
       timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
     },
   }
+}
+
+const TRANSACTION_ACTIONS = new Set(["click", "click_text", "fill", "type", "press", "select"])
+
+async function runActionTransaction(tabId, args = {}) {
+  const started = performance.now()
+  const steps = Array.isArray(args.steps) ? args.steps : []
+  if (!steps.length || steps.length > 20) {
+    return { ok: false, error: "act_and_verify.steps 需要 1-20 个步骤" }
+  }
+  const results = []
+  let firstFailure = null
+
+  for (let index = 0; index < steps.length; index++) {
+    const stepStarted = performance.now()
+    const step = steps[index] || {}
+    const action = String(step.action || "")
+    let outcome
+    try {
+      if (TRANSACTION_ACTIONS.has(action)) {
+        const shouldVerify = step.verify ?? Boolean(step.expect)
+        outcome = await actAndVerify(tabId, {
+          ...step,
+          confirmed: step.confirmed ?? args.confirmed,
+          verify: shouldVerify,
+          __transactionSerialized: true,
+        })
+        if (outcome.ok && shouldVerify && outcome.result?.verified !== true) {
+          outcome = { ok: false, error: `步骤 ${index + 1} 后置条件未成立`, result: outcome.result }
+        }
+      } else if (action === "wait") {
+        outcome = await waitForAcrossNavigation(tabId, { ...(step.expect || {}), timeoutMs: step.timeoutMs ?? step.expect?.timeoutMs })
+        if (outcome.ok && (!outcome.result?.found || outcome.result?.timeout)) {
+          outcome = { ok: false, error: `步骤 ${index + 1} 等待超时`, result: outcome.result }
+        }
+      } else if (action === "reload") {
+        await chrome.tabs.reload(tabId, { bypassCache: !!step.bypassCache })
+        let waited = null
+        if (step.expect) {
+          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs })
+          if (!waited.ok || !waited.result?.found || waited.result?.timeout) {
+            outcome = { ok: false, error: `步骤 ${index + 1} 刷新后验证失败`, result: waited.result }
+          }
+        } else if (step.settleMs) {
+          await waitDelay(Math.min(Math.max(Number(step.settleMs), 50), 5000))
+        }
+        outcome ??= { ok: true, result: { reloaded: true, tabId, waited: waited?.result || null } }
+      } else if (action === "navigate") {
+        const url = String(step.url || "")
+        if (!/^https?:\/\//i.test(url)) throw new Error(`步骤 ${index + 1} navigate 需要 http(s) url`)
+        await chrome.tabs.update(tabId, { url })
+        let waited = null
+        if (step.expect) {
+          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs })
+          if (!waited.ok || !waited.result?.found || waited.result?.timeout) {
+            outcome = { ok: false, error: `步骤 ${index + 1} 导航后验证失败`, result: waited.result }
+          }
+        }
+        outcome ??= { ok: true, result: { navigating: true, tabId, url, waited: waited?.result || null } }
+      } else if (action === "evaluate") {
+        const code = String(step.code || "")
+        const confirmed = step.confirmed ?? args.confirmed
+        if (!confirmed && DANGEROUS_RE.test(stripJsStringsAndComments(code))) {
+          throw new Error(`步骤 ${index + 1} evaluate 命中危险词，需 confirmed:true`)
+        }
+        outcome = await executeJsInTab(tabId, { code, world: step.world })
+      } else {
+        outcome = { ok: false, error: `步骤 ${index + 1} 不支持 action=${action || "(empty)"}` }
+      }
+    } catch (error) {
+      outcome = { ok: false, error: String(error?.message || error) }
+    }
+
+    const entry = {
+      index,
+      action,
+      ok: !!outcome?.ok,
+      result: outcome?.result,
+      error: outcome?.error,
+      timingMs: Math.round((performance.now() - stepStarted) * 10) / 10,
+    }
+    results.push(entry)
+    if (!entry.ok && !firstFailure) firstFailure = entry
+    if (!entry.ok && args.stopOnError !== false) break
+  }
+
+  const result = {
+    completed: !firstFailure && results.length === steps.length,
+    tabId,
+    requestedSteps: steps.length,
+    executedSteps: results.length,
+    failedStep: firstFailure?.index ?? null,
+    error: firstFailure?.error || null,
+    steps: results,
+    timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+  }
+  // 事务的语义失败仍返回结构化步骤，让 Agent 看到准确的断点与已执行结果；
+  // runtime metrics 会把 completed:false 记为失败，不会统计成假成功。
+  return { ok: true, result }
 }
 
 async function sendToContent(tabId, name, args) {
