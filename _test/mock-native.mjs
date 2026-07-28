@@ -1,5 +1,5 @@
 // Mock native messaging + MCP SSE：冒烟测试 host（无需浏览器）。
-// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(35) ④ tools/call 中继与 host 本地工具。
+// 验证：① 帧编解码 ② PTY echo ③ MCP 双协议握手 + tools/list(34) ④ tools/call 中继与 host 本地工具。
 // 端口用随机高位端口（OMEETY_MCP_PORT 传给 host），避免和正在运行的真实 host 抢 49171。
 import { spawn } from "node:child_process"
 import { once } from "node:events"
@@ -187,7 +187,7 @@ try {
   const httpTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`))
   await httpClient.connect(httpTransport)
   const httpList = await httpClient.listTools()
-  ok(httpList?.tools?.length === 35, `Streamable HTTP tools/list = 35 (实际 ${httpList?.tools?.length})`)
+  ok(httpList?.tools?.length === 34, `Streamable HTTP tools/list = 34 (实际 ${httpList?.tools?.length})`)
   const httpCall = await httpClient.callTool({ name: "omeety_get_page_snapshot", arguments: {} })
   ok(httpCall?.content?.[0]?.text?.includes("mocked"), "Streamable HTTP tools/call 中继往返")
   const downloadStatus = await httpClient.callTool({ name: "omeety_download_status", arguments: {} })
@@ -204,7 +204,7 @@ try {
   await post({ jsonrpc: "2.0", id: 1, method: "tools/list" })
   await sleep(800)
   const list = sseMessages.find((m) => m.id === 1)
-  ok(list?.result?.tools?.length === 35, `MCP tools/list = 35 (实际 ${list?.result?.tools?.length})`)
+  ok(list?.result?.tools?.length === 34, `MCP tools/list = 34 (实际 ${list?.result?.tools?.length})`)
   ok(list?.result?.tools?.some((t) => t.name === "omeety_capture_visible_tab"), "工具含 omeety_capture_visible_tab")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_execute_js"), "工具含 omeety_execute_js（新增）")
   ok(list?.result?.tools?.some((t) => t.name === "omeety_wait_for"), "工具含 omeety_wait_for（新增）")

@@ -12,7 +12,7 @@ const NM_NAME = "com.omeety.terminal"
 let nativePort = null
 const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel"}) 连进来
 const panelConfirmations = new Map() // id -> { resolve, timer }，下载等 host 本地工具也能在侧栏确认
-let lastPick = null // 最近一个选取（兼容 omeety_get_user_pick）
+let lastPick = null // 最近一个选取（侧栏 pick_result 广播用；连续选取见 lastPickSet）
 let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
 const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
@@ -321,6 +321,12 @@ async function cdpGetActiveEditorState(tabId, selectAll = false, moveCaretToEnd 
   return response?.result?.value || { editable: false }
 }
 
+// 精简编辑器状态快照：cdpClearEditor 返回给 cdpTypeText 作"基线"，复用 rich/length 免再读一次 evaluate。
+function slimEditorState(state) {
+  if (!state || !state.editable) return null
+  return { editable: true, tag: state.tag, rich: !!state.rich, value: state.value, length: state.length }
+}
+
 async function cdpDispatchNamedKey(tabId, key) {
   const code = key
   const vkMap = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 46 }
@@ -334,8 +340,8 @@ async function cdpDispatchNamedKey(tabId, key) {
 // Cmd/Ctrl+A 没有全选时只删掉一位，却仍然返回成功。
 async function cdpClearEditor(tabId) {
   const initial = await cdpGetActiveEditorState(tabId, true)
-  if (!initial.editable) return { verified: null, beforeLength: null, afterLength: null, reason: "active element is not inspectable as an editor" }
-  if (initial.length === 0) return { verified: true, beforeLength: 0, afterLength: 0 }
+  if (!initial.editable) return { verified: null, beforeLength: null, afterLength: null, afterState: null, reason: "active element is not inspectable as an editor" }
+  if (initial.length === 0) return { verified: true, beforeLength: 0, afterLength: 0, afterState: slimEditorState(initial) }
 
   const platformResult = await chromeDebuggerSendCommand({ tabId }, "Runtime.evaluate", {
     expression: "navigator.platform || navigator.userAgent || ''",
@@ -359,9 +365,11 @@ async function cdpClearEditor(tabId) {
     after = await cdpGetActiveEditorState(tabId)
   }
   if (after.editable && after.length > 0) {
-    throw new Error(`CDP 清空未生效：编辑器仍剩 ${after.length} 个字符`)
+    // 不再硬抛错：调用方（cdpTypeText）text 非空时可降级为"不清空直接追加"；只有纯清空请求才需要把失败透出。
+    // afterState 让调用方复用 rich/length 免再读一次 evaluate；"CDP 清空未生效" 字样保留以兼容回归断言。
+    return { verified: false, beforeLength: initial.length, afterLength: after.length || 0, afterState: slimEditorState(after), reason: `CDP 清空未生效：编辑器仍剩 ${after.length} 个字符` }
   }
-  return { verified: true, beforeLength: initial.length, afterLength: after.length || 0 }
+  return { verified: true, beforeLength: initial.length, afterLength: after.length || 0, afterState: slimEditorState(after) }
 }
 
 async function cdpTypePrintableKey(tabId, char) {
@@ -381,32 +389,71 @@ async function cdpTypePrintableKey(tabId, char) {
   return "keyEvents"
 }
 
+// 读回编辑器，核对所输入文本是否真进去（富文本 insertText 可能被静默吞掉）。
+// accepted 判定：包含目标文本，或长度相对基线有增长（>=1）。完全没进（grew=0 且不包含）才判失败，
+// 触发 cdpTypeText 的逐字回退；部分进入则接受，避免为长文本无谓地逐字重打。
+async function cdpVerifyTextEntered(tabId, text, baseline) {
+  const after = await cdpGetActiveEditorState(tabId)
+  if (!after.editable) return { accepted: false, after, reason: "输入后 active element 不再可编辑（焦点漂移或切错 tab）" }
+  const want = String(text ?? "")
+  const baseLen = baseline && Number.isFinite(baseline.length) ? baseline.length : after.length
+  const grew = after.length - baseLen
+  const accepted = (after.value || "").includes(want) || grew >= 1
+  return { accepted, after, reason: accepted ? null : "输入未被接受（insertText 被编辑器吞掉）" }
+}
+
 // 真实文本输入：insertText 适合 CJK/emoji 与富文本；keyEvents 为 ASCII/数字逐字发出
 // rawKeyDown + char + keyUp，适合只认可信按键的 Canvas/受控表格编辑器。keyEvents 中的非 ASCII
 // 字符会单字回退到 insertText，避免 CJK 乱码。clear=true（默认）时先用平台主修饰键清场。
 async function cdpTypeText(tabId, text, clear = true, inputMode = "insertText") {
   await ensureCdpAttached(tabId)
+  const mode = normalizeCdpInputMode(inputMode)
   let clearResult = null
+  let baseline = null
   if (clear) {
+    // cdpClearEditor 不再抛错：失败时返回 {verified:false, afterState}，复用作基线，免一次 evaluate。
     clearResult = await cdpClearEditor(tabId)
+    baseline = clearResult.afterState || null
   }
   const s = String(text ?? "")
-  if (!s) return { mode: normalizeCdpInputMode(inputMode), clearResult }
-  const mode = normalizeCdpInputMode(inputMode)
+  if (!s) return { mode, clearResult, accepted: clearResult ? clearResult.verified !== false : null }
+  // clear=false 或 clear 未拿到状态：补一次基线读（append 场景也需要基线做长度比对）。
+  if (!baseline) baseline = await cdpGetActiveEditorState(tabId)
+  if (!baseline.editable) {
+    // 活动元素不可编辑——多半是焦点漂移或切错 tab。直接拒，不发 insertText 到错的 activeElement。
+    return { mode, clearResult, accepted: false, reason: "active element 不可编辑（焦点漂移或切错 tab）" }
+  }
+  // 只有富文本（contenteditable）会静默吞 insertText；plain input/textarea 基本不会——只对富文本付读回验证代价。
+  const verifyNeeded = Boolean(baseline.rich)
+
   if (mode === "keyEvents") {
     for (const ch of s) await cdpTypePrintableKey(tabId, ch)
-    return { mode, clearResult }
+    if (!verifyNeeded) return { mode, clearResult, accepted: true }
+    const v = await cdpVerifyTextEntered(tabId, s, baseline)
+    return { mode, clearResult, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) }
   }
+
+  let insertThrew = false
   try {
     await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: s })
-    return { mode, clearResult }
   } catch {
-    // insertText 不被支持/失败时退回逐字 char（ASCII 可用；CJK 会乱码但好过完全不输入）
-    for (const ch of s) {
-      await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch })
-    }
-    return { mode: "keyEvents", clearResult }
+    insertThrew = true
   }
+  if (insertThrew) {
+    // insertText 不被支持/失败 → 逐字（cdpTypePrintableKey 会为非 ASCII 单字再回退 insertText，避免 CJK 乱码）。
+    for (const ch of s) await cdpTypePrintableKey(tabId, ch)
+    if (!verifyNeeded) return { mode: "keyEvents", clearResult, accepted: true }
+    const v = await cdpVerifyTextEntered(tabId, s, baseline)
+    return { mode: "keyEvents", clearResult, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) }
+  }
+  if (!verifyNeeded) return { mode, clearResult, accepted: true }
+  // 富文本：读回比对。被吞则光标归末 + 逐字可信按键回退（罕见、慢但保对）。
+  const v = await cdpVerifyTextEntered(tabId, s, baseline)
+  if (v.accepted) return { mode, clearResult, accepted: true }
+  await cdpGetActiveEditorState(tabId, false, true)
+  for (const ch of s) await cdpTypePrintableKey(tabId, ch)
+  const v2 = await cdpVerifyTextEntered(tabId, s, baseline)
+  return { mode: "keyEvents", clearResult, accepted: v2.accepted, fellBack: true, ...(v2.reason ? { reason: v2.reason } : {}) }
 }
 
 // CDP 真实按键（rawKeyDown + keyUp），用于触发富文本编辑器的快捷键/提交
@@ -525,7 +572,7 @@ async function execCdpTool(tabId, name, args) {
     const typed = await cdpTypeText(tabId, ctext, clear, args.inputMode)
     const commitKey = ["Enter", "Tab"].includes(args.commitKey) ? args.commitKey : null
     if (commitKey) await cdpKeyPress(tabId, commitKey)
-    return { ok: true, result: { typed: true, textLength: ctext.length, cleared: clear, clearVerified: typed.clearResult?.verified ?? null, refocused: !!pt, method: `cdp:Input.${typed.mode}`, committedWith: commitKey, tabId } }
+    return { ok: true, result: { typed: true, accepted: typed.accepted ?? true, textLength: ctext.length, cleared: clear, clearVerified: typed.clearResult?.verified ?? null, refocused: !!pt, method: `cdp:Input.${typed.mode}`, committedWith: commitKey, ...(typed.fellBack ? { fellBack: true } : {}), ...(typed.reason ? { inputReason: typed.reason } : {}), tabId } }
   }
   if (isPress) {
     const ckey = String(args.key || "")
@@ -611,16 +658,6 @@ async function handleToolCall({ id, name, args }) {
       r = { ok: true, result: getRuntimeMetrics() }
     } else if (name === "omeety_capture_visible_tab") {
       r = await captureDownscaled(tab?.id)
-    } else if (name === "omeety_get_user_pick") {
-      // 只返回"当前活动 tab"的 pick——否则切到别的 tab 后会拿到旧 tab 的元素，click/fill(uid:'pick') 作用到错页面。
-      const curTabId = tab?.id ?? null
-      if (lastPick && lastPick.tabId != null && lastPick.tabId !== curTabId) {
-        r = { ok: true, result: { pick: null, msg: `pick 来自 tab ${lastPick.tabId}，当前活动 tab 是 ${curTabId}，请在该 tab 重新点 📌 选取` } }
-      } else {
-        r = lastPick
-          ? { ok: true, result: lastPick }
-          : { ok: true, result: { pick: null, msg: "用户还没选取元素。让用户点侧栏 📌 选取，再到页面点一下目标元素。" } }
-      }
     } else if (name === "omeety_get_user_picks") {
       const curTabId = tab?.id ?? null
       if (lastPickSet && lastPickSet.tabId != null && lastPickSet.tabId !== curTabId) {

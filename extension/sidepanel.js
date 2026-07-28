@@ -520,7 +520,7 @@ $("saveBtn").addEventListener("click", async () => {
 
 // 工具按类别分组渲染（结构化，便于查看）。name 不在下列表里的归"其他"。
 const TOOL_CATEGORIES = [
-  { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_pick", "omeety_get_user_picks", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
+  { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_picks", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
   { title: "动作事务 / 元素操作", names: ["omeety_act_and_verify", "omeety_click", "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select", "omeety_hover", "omeety_scroll"] },
   { title: "等待", names: ["omeety_wait_for"] },
   { title: "性能 / 诊断", names: ["omeety_get_runtime_metrics"] },
