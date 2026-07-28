@@ -433,6 +433,26 @@ async function cdpTypeText(tabId, text, clear = true, inputMode = "insertText") 
     return { mode, clearResult, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) }
   }
 
+  if (mode === "composition") {
+    // 模拟真人中文 IME 输入（任意页面通用）。普通 insertText 跳过 IME、不发 compositionend，
+    // 导致 React 受控组件 / 富文本搜索框 / 监听 compositionend 的页面识别不到输入（搜索不触发）。
+    // imeSetComposition 启动合成(compositionstart/update)，insertText 提交(compositionend+input)，
+    // 配合 Process(229) 按键信号 = 完整 IME 事件序列，与真人中文输入法打字等价。
+    const len = [...s].length
+    try {
+      await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Process", windowsVirtualKeyCode: 229 })
+      await chromeDebuggerSendCommand({ tabId }, "Input.imeSetComposition", { text: s, selectionStart: len, selectionEnd: len })
+      await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: s })
+      await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", key: "Process", windowsVirtualKeyCode: 229 })
+    } catch {
+      // composition 不被支持 → 回退普通 insertText（至少文本能进）
+      try { await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: s }) } catch {}
+    }
+    if (!verifyNeeded) return { mode, clearResult, accepted: true }
+    const v = await cdpVerifyTextEntered(tabId, s, baseline)
+    return { mode, clearResult, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) }
+  }
+
   let insertThrew = false
   try {
     await chromeDebuggerSendCommand({ tabId }, "Input.insertText", { text: s })

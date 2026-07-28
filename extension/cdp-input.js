@@ -50,7 +50,9 @@ export function getPrintableKeyDescriptor(char) {
 }
 
 export function normalizeCdpInputMode(mode) {
-  return mode === "keyEvents" ? "keyEvents" : "insertText"
+  if (mode === "keyEvents") return "keyEvents"
+  if (mode === "composition") return "composition"
+  return "insertText"
 }
 
 export function getPrimaryModifier(platform = "") {
