@@ -75,7 +75,13 @@ Then:
    the context into the current agent input line.
 
 Continue below for the full installation model, configuration locations, and
-uninstall steps, or download the [latest Release](https://github.com/littlejoely/omeety-terminal/releases/latest).
+uninstall steps.
+
+> **Don't want to clone, or behind a restricted network?** Download
+> `omeety-terminal.zip` from [Releases](https://github.com/littlejoely/omeety-terminal/releases/latest)
+> (dependencies already bundled), then run `installer\install.ps1` (Windows) or
+> `./installer/install.sh` (macOS) from the project root — no `npm install` and
+> no network needed for dependencies.
 
 ## Product role: a browser exoskeleton for agents
 
@@ -210,6 +216,25 @@ Then load the extension:
 4. Use Settings to select a shell, configure per-tab scrollback, and choose the
    session policy used after the side panel closes.
 
+## Common use cases
+
+Once installed, drive the browser from your agent in plain language:
+
+| Scenario | What you can say |
+|---|---|
+| **Web IM automation** | “Post this weekly report to the Feishu/DingTalk group XX, attach the file too” |
+| **Form bulk-fill** | “Fill in and submit these expense/approval forms from this Excel” |
+| **Web data scraping** | “Read every page of this list — product names and prices — into a local csv” |
+| **Cross-site automation** | “Log into site A, export this month's data, upload to site B, then notify me” |
+| **Local × browser** | “Scrape this web table to local, then fill this local roster back into the page” |
+
+> For **icon-only buttons with no text** (common in IM clients and complex
+> back-offices), agents struggle to tell them apart. Click **Pick** in the side
+> panel to enter pick mode: click any element on the page and it is framed,
+> numbered, and handed to the agent for precise targeting. Pick multiple elements
+> in a row (Enter or **Finish picking** to end; results are inserted as
+> `pick-1..N` without an Enter keystroke).
+
 ## Terminal shortcuts and features
 
 - **Ctrl+F** searches terminal output; Enter finds the next match,
@@ -316,6 +341,9 @@ interrupted and resume from their existing segments after the Host starts again.
 | A small amount of old output is missing after reopening the panel | The session is still running, but Omeety only replays the most recent 64 KB. Continue typing; applications should persist any complete history they require. |
 | Multiple terminal tabs use too much memory | Reduce Terminal scrollback to 3,000 or 5,000 in Settings. Only the active tab retains a WebGL renderer. |
 | A browser debugging banner appears after `execute_js` | The tool uses CDP to work on strict-CSP pages. This is Chromium's visible notice for the `debugger` permission and does not affect ordinary terminal use. |
+| Browser reports “native messaging host communication failed” (-101) | The install path contains non-ASCII characters or spaces. Move the whole project to a **pure-ASCII, space-free path** (e.g. `C:\omeety-terminal`) and rerun the installer. |
+| Loading the extension errors, or selecting a directory does nothing | Select the project's **`extension` folder** (it must contain `manifest.json`) — not the project root and not the zip archive. |
+| `install.ps1` complains about execution policy / unsigned script | Add `-ExecutionPolicy Bypass`; it applies only to this run and does not change system policy. |
 
 ## Uninstall
 
