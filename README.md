@@ -70,8 +70,12 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 4. 对 Agent 说：**“描述当前网页”**；或点侧栏的**选取**，连续点多个元素，
    按 Enter/点「完成选取」，上下文会自动写进当前 Agent 输入框。
 
-需要完整安装原理、配置位置和卸载步骤，请继续阅读下文。也可以直接下载
-[最新 Release](https://github.com/littlejoely/omeety-terminal/releases/latest)。
+需要完整安装原理、配置位置和卸载步骤，请继续阅读下文。
+
+> **不想 clone、或网络受限？** 到 [Releases](https://github.com/littlejoely/omeety-terminal/releases/latest)
+> 下载 `omeety-terminal.zip`（已含全部依赖），解压后在项目根目录同样跑
+> `installer\install.ps1`（Windows）或 `./installer/install.sh`（macOS）即可，
+> 无需 `npm install`，也无需联网拉依赖。
 
 ## 产品定位：Agent 的浏览器外骨骼
 
@@ -169,6 +173,22 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
    - 让它"描述当前网页" → 它会读取你**当前 Chrome/Edge 标签页**的内容。
 4. 设置（⚙）：可切换 Shell、调整每个 Tab 的回滚行数，并配置侧栏关闭后的会话保活策略。
 
+## 常见使用场景
+
+装好之后，用自然语言让 Agent 指挥浏览器——以下是典型玩法：
+
+| 场景 | 你可以这样对 Agent 说 |
+|---|---|
+| **网页 IM 自动化** | “把这份周报发到飞书 / 钉钉的 XX 群，附件也一起发” |
+| **表单批量填写** | “照这个 Excel 把报销单 / 审批单逐条填好提交” |
+| **网页数据抓取** | “把这个列表每一页的商品名和价格读出来，存成本地 csv” |
+| **跨网站自动化** | “登录 A 站导出本月数据，再上传到 B 站，完事发个通知” |
+| **本地 × 浏览器联动** | “把网页上这份表格抓下来存本地，再把本地这份名单填回去” |
+
+> 遇到**没有文字的图标按钮**（IM、复杂后台里很常见），Agent 难分清谁是谁。
+> 点侧栏「**选取**」进入拾取模式，在网页上点哪个元素，它就被框选、编号并喂给 Agent，
+> 之后操作就精准了。支持连续选取多个元素（Enter 或「完成选取」结束，结果以 `pick-1…N` 写入当前输入框，不会自动回车）。
+
 ## 终端快捷键 / 特性
 
 - **Ctrl+F**：终端内搜索输出（Enter 下一个 / Shift+Enter 上一个 / Esc 关闭）。
@@ -236,6 +256,9 @@ Host 后任务会记为中断，并在下次 Host 成功启动后从已有分块
 | 关闭侧栏后再打开，少量旧输出没显示 | 会话仍在运行，但只回放最近 64KB 输出；继续输入即可，完整历史应由终端程序自身保存 |
 | 多终端 Tab 占用偏高 | 在设置中把“终端回滚行数”调为 3,000 或 5,000；Omeety 只为活动 Tab 保留 WebGL Renderer |
 | `execute_js` 后出现浏览器调试提示条 | 该工具为兼容严格 CSP 使用 CDP；这是 Chromium 对 `debugger` 权限的可见提示，不影响普通终端 |
+| 浏览器报「无法与原生消息宿主通信」(-101) | 安装路径含中文或空格。把整个项目目录移到**纯英文、无空格**路径（如 `C:\omeety-terminal`），重跑安装器 |
+| 加载扩展报错 / 选目录没反应 | 要选项目里的 **`extension` 文件夹**（里面要有 `manifest.json`），不是项目根目录、也不是 zip 包 |
+| `install.ps1` 报执行策略 / 未签名 | 加 `-ExecutionPolicy Bypass` 参数即可，只对本次运行生效，不改系统策略 |
 
 ## 卸载
 
