@@ -854,7 +854,9 @@ async function uploadFile(tabId, args) {
   const chooserPromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       if (pendingFileChoosers.get(tabId)?.resolve === resolve) pendingFileChoosers.delete(tabId)
-      reject(new Error("upload_file: 点了按钮但 5s 内没等到文件选择对话框（目标可能不是文件上传入口）"))
+      // 超时不抛错：返回 null → backendNodeId 为 null → 走兜底 setFileInputByQuery
+      // （直接找页面 <input type=file> 注入，支持飞书等不开原生 chooser 的自定义上传 UI）
+      resolve(null)
     }, 5000)
     pendingFileChoosers.set(tabId, { resolve, timer })
   })
