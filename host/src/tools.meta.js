@@ -141,10 +141,10 @@ export const TOOLS = [
     description:
       "Run one verified browser action, or a pinned multi-step transaction in one MCP round trip. Pass tabId so user tab switches cannot redirect the work. Single-action mode supports click/click_text/fill/type/press/select. Transaction mode accepts 1-20 steps and additionally supports wait/reload/navigate/evaluate, stops on the first semantic failure by default, and returns per-step timing/results; always check completed and failedStep. Low-level steps default to no extra verification unless expect/verify is supplied; use evaluate assertions or explicit postconditions for accuracy.",
     inputSchema: (() => {
-      // NOTE: 用 anyOf 表达“action 或 steps 至少传一个”。Moonshot/Kimi 的 JSON Schema 校验比
-      // OpenAI 严：anyOf 每个分支必须自带 type（不能只继承父级 type），否则报 400
-      // "type should be defined in anyOf items instead of the parent schema"。因此把 properties
-      // 复用到每个 anyOf 分支，每分支各自声明 type/required。
+      // 用 anyOf 表达“action 或 steps 至少传一个”。Moonshot/Kimi 的 JSON Schema 校验比 OpenAI 严：
+      // 用了 anyOf，父级就不能再写 type（type 只能放进 anyOf 子项），否则报 400
+      // "type should be defined in anyOf items instead of the parent schema"。
+      // 因此父级只保留 properties，type/required 放进每个 anyOf 子项。
       const properties = {
         tabId: { type: "integer", description: "Pin the whole action/transaction to this browser tab even if the user switches tabs" },
         action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select"] },
@@ -162,8 +162,10 @@ export const TOOLS = [
         steps: { type: "array", minItems: 1, maxItems: 20, items: TRANSACTION_STEP_SCHEMA },
         stopOnError: { type: "boolean", default: true },
       }
+      // NOTE: Moonshot/Kimi 校验要求——用了 anyOf 就不能再在父级写 type（"type should be
+      // defined in anyOf items instead of the parent schema"）。所以这里只保留 properties + anyOf，
+      // type 放进每个 anyOf 子项。OpenAI/Anthropic 也接受这种写法。
       return {
-        type: "object",
         properties,
         anyOf: [
           { type: "object", properties, required: ["action"] },
