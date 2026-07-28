@@ -19,7 +19,7 @@ const TRANSACTION_STEP_SCHEMA = {
     uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
     text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
     cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" }, verify: { type: "boolean" },
-    refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+    refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] },
     commitKey: { type: "string", enum: ["Enter", "Tab"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 },
     timeoutMs: { type: "integer", minimum: 500, maximum: 60000 }, settleMs: { type: "integer", minimum: 50, maximum: 5000 },
     expect: EXPECTATION_SCHEMA,
@@ -152,7 +152,7 @@ export const TOOLS = [
         text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
         cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" },
         refocus: { type: "boolean", description: "Set false to keep the current focused editor instead of clicking uid/selector/x,y again" },
-        inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+        inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] },
         commitKey: { type: "string", enum: ["Enter", "Tab"] },
         clickCount: { type: "integer", minimum: 1, maximum: 3 },
         verify: { type: "boolean", description: "Set false to dispatch a single action without an extra before/wait/after verification pass" },
@@ -188,13 +188,13 @@ export const TOOLS = [
     description: "Replace a form field. With cdp:true, inputMode:'insertText' preserves CJK; inputMode:'keyEvents' sends trusted per-character ASCII/numeric keys for Canvas/controlled grids. Set refocus:false when the transient editor is already focused, and optionally commitKey:'Enter'|'Tab'. Clearing uses Cmd+A on macOS and Ctrl+A elsewhere. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
-      properties: { uid: { type: "string" }, selector: { type: "string" }, value: { type: "string" }, cdp: { type: "boolean" }, refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents"] }, commitKey: { type: "string", enum: ["Enter", "Tab"] } },
+      properties: { uid: { type: "string" }, selector: { type: "string" }, value: { type: "string" }, cdp: { type: "boolean" }, refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] }, commitKey: { type: "string", enum: ["Enter", "Tab"] } },
       required: ["value"],
     },
   },
   {
     name: "omeety_type_text",
-    description: "Type/append text into an editable target. With cdp:true, inputMode:'insertText' preserves CJK; inputMode:'keyEvents' sends trusted keydown/char/keyup sequences for ASCII/numeric Canvas editors. Set refocus:false to keep an already-focused transient editor, clear:false to append, and commitKey:'Enter'|'Tab' for atomic grid edits. Leaves a yellow bar.",
+    description: "Type/append text into an editable target. With cdp:true, inputMode:'insertText' preserves CJK; inputMode:'keyEvents' sends trusted keydown/char/keyup sequences for ASCII/numeric Canvas editors; inputMode:'composition' simulates a real IME (fires compositionstart/compositionend) so React/contenteditable search boxes and onChange-bound fields actually register the input — use when insertText types but the page doesn't react (search/onChange not triggered). Set refocus:false to keep an already-focused transient editor, clear:false to append, and commitKey:'Enter'|'Tab' for atomic grid edits. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
       properties: {
@@ -206,7 +206,7 @@ export const TOOLS = [
         clear: { type: "boolean" },
         cdp: { type: "boolean" },
         refocus: { type: "boolean" },
-        inputMode: { type: "string", enum: ["insertText", "keyEvents"] },
+        inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] },
         commitKey: { type: "string", enum: ["Enter", "Tab"] },
       },
       required: ["text"],
