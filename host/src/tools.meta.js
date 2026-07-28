@@ -244,12 +244,6 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { message: { type: "string" }, detail: { type: "string" } } },
   },
   {
-    name: "omeety_get_user_pick",
-    description:
-      "Return the most recently selected element from the sidebar picker (backward-compatible single-pick view). Returns uid:'pick-N' plus tag/role/text/selector/bbox/url, or {pick:null}. To act on all selected elements, prefer omeety_get_user_picks.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
     name: "omeety_get_user_picks",
     description:
       "Return all elements from the user's latest completed continuous selection. The user clicks sidebar 选取, clicks multiple page elements, then presses Enter or clicks 完成选取. Returns {count,picks:[{uid:'pick-1'..,tag,role,text,label,type,href,selector,bbox,url}]}. Pass each uid to omeety_click/fill/type_text/select/hover.",
@@ -401,7 +395,7 @@ const PINNABLE_BROWSER_TOOLS = new Set([
   "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_fetch_with_cookie",
   "omeety_apply_preview_patch", "omeety_rollback_preview_patch", "omeety_click", "omeety_act_and_verify",
   "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key",
-  "omeety_select", "omeety_scroll", "omeety_get_user_pick", "omeety_get_user_picks", "omeety_upload_file",
+  "omeety_select", "omeety_scroll", "omeety_get_user_picks", "omeety_upload_file",
   "omeety_navigate", "omeety_reload", "omeety_go_back", "omeety_execute_js", "omeety_get_console_logs",
   "omeety_wait_for", "omeety_hover",
 ])
