@@ -143,8 +143,13 @@ async function post(msg) {
 
 try {
   await sleep(1000)
+  const pingSentAt = Date.now()
+  send({ type: "ping", sentAt: pingSentAt })
+  await sleep(100)
+  ok(nativeMessages.some((m) => m.type === "pong" && m.sentAt === pingSentAt), "ping 仅作为健康探测并收到 pong")
   send({ type: "hello", shell: "powershell", cols: 80, rows: 24 })
   await sleep(1500)
+  ok(nativeMessages.some((m) => m.type === "session_reset" && m.sid === "default"), "新 shell 通知前端清理旧代会话画面")
   send({ type: "input", data: "echo omeety_mock_test_42\r\n" })
   await sleep(1800)
   ok(outputs.join("").toLowerCase().includes("omeety_mock_test_42"), "PTY echo 回显")

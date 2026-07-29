@@ -324,6 +324,9 @@ function connectPanel() {
       const detail = String(msg.detail || "")
       const approved = window.confirm(`${msg.message || "请确认操作"}${detail ? `\n\n${detail}` : ""}`)
       send({ type: "confirmation_response", id: msg.id, approved })
+    } else if (msg?.type === "session_reset") {
+      // Host 只在真正创建新 shell 时发送；普通面板重连现有 PTY 不会清屏。
+      tabs.get(msg.sid || "default")?.term?.reset?.()
     } else if (msg?.type === "output") {
       // 按 sid 路由到对应 tab 的终端（host 给每条 output 都打了 sid）
       tabs.get(msg.sid || "default")?.term?.write(msg.data)
