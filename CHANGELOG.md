@@ -37,6 +37,9 @@ Browser Core v2, durable browser actions, and cross-frame reliability / Browser 
   the old document cannot produce a false success.
 - Make the macOS offline installer reuse bundled dependencies and clear the
   browser quarantine attribute from bundled `node-pty` binaries before launch.
+- Preserve terminal sessions when browser background scheduling or system sleep
+  delays extension heartbeats; Native Messaging EOF/error now owns disconnect
+  detection, while ping/pong reports health without terminating live PTYs.
 
 - Let browser tools pin an explicit `tabId`, so a user's mid-task tab switch no
   longer redirects a pending action or wait to the wrong page.
