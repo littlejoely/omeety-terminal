@@ -6,7 +6,35 @@ Omeety Terminal 的重要公开变更记录在此处。
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-30
+
+Browser Core v2, durable browser actions, and cross-frame reliability / Browser Core v2、可靠浏览器操作与跨 Frame 能力。
+
+### Added / 新增
+
+- Add Browser Core v2 in the existing Native Host: a tab/Target/Frame registry,
+  policy engine, high-level tool mapping, runtime metrics, and redacted rotating audit.
+- Add seven compatible `omeety_browser_*` high-level tools for observe, query,
+  action, transaction, wait, tab management, and status; all 31 existing browser
+  tools remain available.
+- Add an extension Browser Adapter that recursively auto-attaches CDP targets and
+  merges DOMSnapshot, Accessibility, and frame topology across out-of-process iframes.
+- Recover stale element UIDs with composite role/label/text/attribute/parent/geometry
+  locators, bounded retry, ambiguity rejection, and recovery metrics.
+- Add side-panel read/act/submit permission modes, plus
+  Browser Core health and target status through MCP.
+- Add deterministic Host tests and a real Chromium/OOPIF regression. The controlled
+  rerender fixture improves stale-reference hits from 0/100 to 100/100; see
+  `docs/browser-core-v2.md` for the complete before/after report.
+- Add durable action completion levels (`dispatched`, `applied`, `committed`),
+  optional post-reload verification, modifier-key chords, and inactive-tab CDP capture.
+
 ### Fixed / 修复
+
+- Promote matched text leaves to likely clickable parent cards and use compact
+  query/snapshot payloads, improving SPA contact/menu accuracy while reducing transfer work.
+- Gate navigation and reload postconditions on a new document epoch so text left in
+  the old document cannot produce a false success.
 
 - Let browser tools pin an explicit `tabId`, so a user's mid-task tab switch no
   longer redirects a pending action or wait to the wrong page.
@@ -152,3 +180,4 @@ First public beta / 首个公开测试版。
 [0.1.1]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.0
 [0.1.2]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.1.2
+[0.2.0]: https://github.com/littlejoely/omeety-terminal/releases/tag/v0.2.0

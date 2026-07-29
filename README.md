@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#已知限制--安全)
-[![MCP tools: 35](https://img.shields.io/badge/MCP_tools-35-5ee7b1?style=flat-square)](#mcp-工具35-个)
+[![MCP tools: 41](https://img.shields.io/badge/MCP_tools-41-5ee7b1?style=flat-square)](#mcp-工具41-个)
 
 **Omeety Terminal 是 CLI Agent 的浏览器外骨骼：把真实本地终端放进
 Edge/Chrome 侧栏，让 Codex、Claude Code、Kimi Code 以及任何支持 MCP 的
 CLI Agent 共用当前网页的同一双眼睛和手。**
 
 [3 分钟快速开始](#3-分钟快速开始) · [为什么是 Omeety](#为什么是-omeety) ·
-[工作原理](#它怎么工作一张图) · [35 个 MCP 工具](#mcp-工具35-个) ·
+[工作原理](#它怎么工作一张图) · [41 个 MCP 工具](#mcp-工具41-个) ·
 [安全边界](#已知限制--安全) · [参与开发](CONTRIBUTING.md)
 
 ![Omeety 通过真实 MCP 路径读取并操作当前标签页](docs/images/omeety-demo.gif)
 
 > 上面的可复现演示使用确定性的本地 MCP 客户端，实际经过扩展、Native
 > Messaging、ConPTY 和浏览器工具；Codex、Claude Code、Kimi Code 使用同一套
-> 35 个工具。演示不依赖模型账号或预录的模型回答。
+> 41 个工具。演示不依赖模型账号或预录的模型回答。
 
 没有专用聊天模式，也没有模型切换按钮——它就是一个真实 shell。你仍然可以运行
 `git`、`npm`、`claude`、`codex`、`kimi` 或任意本地命令；区别是里面的 Agent
@@ -108,24 +108,26 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 当前第一优先级是**可靠性与可测性能**：终端输入输出和浏览器工具必须做到“结果
 真实、错误可信、页面跳转不中断”，并用真实 PTY/WebGL 基准防止资源与吞吐回退。
-连续选取、Context Bundle v1 和动作后验证已经落地；下一阶段会继续完善跨域 iframe
-兜底和更细粒度的网络遥测。
+连续选取、Context Bundle v1、Browser Core v2、跨域 iframe 深度观察和动作后验证已经
+落地；下一阶段会继续完善更细粒度的网络遥测。
 
 ## 它怎么工作（一张图）
 
 ```
 扩展侧栏 [ xterm.js 终端 ]  ←─ native messaging ─→  本地 host（Node，一个进程）
                                                          ├─ PTY：真实 shell，I/O 桥到终端
+                                                         ├─ Browser Core：目标、权限、事务、指标与审计
                                                          ├─ 下载核心：任务状态、分块、校验、原子落盘
                                                          └─ MCP Streamable HTTP @ http://127.0.0.1:49171/mcp
                                                                ↑ claude/codex/kimi 用各自配置连它
-                                                         浏览器工具 → 转发到 content.js
+                                                         浏览器工具 → Browser Adapter/CDP + content.js
                                                          下载工具 → host 本地核心
 ```
 
 - 首次打开终端面板时，浏览器拉起 host；之后 offscreen 按设置保活 host/PTY（持续保活、空闲 30 分钟或立即结束）。
 - 重新打开侧栏会从 host 获取真实会话清单，恢复全部仍在运行的终端 Tab，并回放有限的近期输出。
-- 一个进程干三件事：终端 I/O 中继、PTY（真 shell）、MCP 服务。
+- Browser Core 在 Host 内统一目标、权限和高层工具；扩展侧 Browser Adapter 递归观察跨进程 iframe/worker，不额外启动常驻后端。
+- 同一个本地进程承载终端 I/O、PTY、Browser Core、下载核心与 MCP 服务。
 
 ## ⚠ 前置：必须有一个本地 host
 
@@ -169,9 +171,9 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 1. 点扩展图标开侧栏 → 首次有"真·终端=整机权限"的确认门，点「我了解」。
 2. 出现系统 Shell 提示符（Windows 为 PowerShell，macOS 为 zsh）。敲 `claude`（或 `codex` / `kimi`）。
 3. 在 agent 里：
-   - `/mcp`（claude）能看到 `omeety_terminal` + 35 个 `omeety_*` 工具已连上。
+   - `/mcp`（claude）能看到 `omeety_terminal` + 41 个 `omeety_*` 工具已连上。
    - 让它"描述当前网页" → 它会读取你**当前 Chrome/Edge 标签页**的内容。
-4. 设置（⚙）：可切换 Shell、调整每个 Tab 的回滚行数，并配置侧栏关闭后的会话保活策略。
+4. 设置（⚙）：可切换 Shell、调整每个 Tab 的回滚行数、配置会话保活，并选择浏览器权限模式。
 
 ## 常见使用场景
 
@@ -204,12 +206,29 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 - **连续选取**：点「选取」后在网页连续点选（再次点击可取消该项），按 Enter 或点
   「完成选取」结束；`pick-1…N` 稳定引用和简洁摘要会写入当前终端输入行，且不会自动回车执行。
 
-## MCP 工具（35 个）
+## MCP 工具（41 个）
 
-其中 32 个是浏览器眼睛与双手，3 个是 MCP-first 的本地下载工具；Codex、Claude
+其中 38 个是浏览器眼睛与双手，3 个是 MCP-first 的本地下载工具；Codex、Claude
 Code、Kimi Code 等 Agent 自动使用同一套工具契约。
 
-### 浏览器工具（32 个）
+### Browser Core 高层工具（7 个）
+
+`omeety_browser_observe`、`omeety_browser_query`、`omeety_browser_act`、
+`omeety_browser_transaction`、`omeety_browser_wait`、`omeety_browser_tabs` 和
+`omeety_browser_status` 提供稳定的统一入口。它们负责锁定目标、权限检查、动作后验证、
+自动恢复、指标与脱敏审计；原有工具继续保留，因此现有 Agent 提示词和调用方式无需迁移。
+
+深度观察会合并主文档与跨进程 iframe 的 DOMSnapshot、Accessibility Tree 和 Frame
+拓扑。页面重渲染导致旧 `uN` 失效时，复合定位器会按角色、标签、文本、属性、父节点与
+位置重新定位；歧义结果不会盲点。
+
+默认观察使用 compact 快照，去掉重复的长 CSS 路径；查询会把命中的纯文本自动提升到
+最近的可点击父容器。动作结果区分 `dispatched`（事件已发出）、`applied`（后置条件成立）
+和 `committed`（刷新后仍成立）。需要确认服务端已保存时，在 `expect` 中传
+`persistAfterReload:true`。`press_key` 支持 `Meta/Control/Alt/Shift` 组合键；显式指定
+非活动 `tabId` 的截图由 CDP 捕获，不会误截当前标签页。
+
+### 浏览器底层工具（31 个）
 
 **查看 / 获取**：`omeety_get_context_bundle`（结构化元素上下文 + 局部截图）、`omeety_get_page_snapshot`（稳定 uid + 增量快照）、`omeety_get_selected_context`、`omeety_capture_visible_tab`、`omeety_fetch_with_cookie`、`omeety_get_user_pick`、`omeety_get_user_picks`（连续选取的 `pick-1…N`）、`omeety_list_tabs`、`omeety_get_console_logs`、`omeety_get_runtime_metrics`。
 

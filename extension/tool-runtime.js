@@ -15,6 +15,19 @@ export function isTransientContentErrorMessage(message) {
   )
 }
 
+const TRANSACTION_MUTATING_ACTIONS = new Set(["click", "click_text", "fill", "type", "press", "select", "navigate", "reload"])
+
+// Summarize the strongest completion level shared by every mutating step.
+// Keep this pure so a misplaced variable cannot break the service worker again.
+export function aggregateTransactionCompletion(results = [], firstFailure = null) {
+  if (firstFailure) return "partial"
+  const mutatingSteps = results.filter((step) => TRANSACTION_MUTATING_ACTIONS.has(step?.action))
+  if (!mutatingSteps.length) return "observed"
+  if (mutatingSteps.every((step) => step.completionLevel === "committed")) return "committed"
+  if (mutatingSteps.every((step) => step.completionLevel === "applied" || step.completionLevel === "committed")) return "applied"
+  return "dispatched"
+}
+
 // Runtime.evaluate receives source text directly from CDP, so this wrapper does
 // not depend on eval/new Function and works on pages whose CSP forbids unsafe-eval.
 export function buildPageEvaluationExpression(code) {

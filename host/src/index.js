@@ -68,7 +68,7 @@ log("boot", {
   stdoutIsTTY: process.stdout.isTTY,
 })
 
-startMcpHttp({ port: MCP_PORT, nmSend })
+const { browserCore } = startMcpHttp({ port: MCP_PORT, nmSend })
 
 // 静默看门狗：扩展每 8s 发 ping。若 25s 没收到任何 native 消息，说明 SW 已回收 / 面板已关，
 // 但本进程没拿到 stdin EOF（Edge 有时不及时关管道）→ 主动退出，释放 49171，避免变僵尸坑下次连接。
@@ -125,6 +125,17 @@ startNmReader((msg) => {
       break
     case "tool_result":
       resolveResult(msg)
+      break
+    case "browser_event":
+      browserCore.ingestEvent(msg.event || {})
+      break
+    case "browser_policy": {
+      const policy = browserCore.updatePolicy(msg.policy || {})
+      nmSend({ type: "browser_status", status: browserCore.status(), policy })
+      break
+    }
+    case "browser_status_request":
+      nmSend({ type: "browser_status", status: browserCore.status({ includeEvents: !!msg.includeEvents }) })
       break
     case "list_tools":
       // 设置面板"查看工具"子菜单：返回 omeety 注册的全部工具（name + description）。

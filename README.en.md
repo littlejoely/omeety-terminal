@@ -5,21 +5,21 @@
 [![Release](https://img.shields.io/github/v/release/littlejoely/omeety-terminal?display_name=tag&style=flat-square)](https://github.com/littlejoely/omeety-terminal/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7dd3fc?style=flat-square)](LICENSE)
 [![Platform: Windows/macOS](https://img.shields.io/badge/platform-Windows_%7C_macOS-8aa4ff?style=flat-square)](#known-limitations-and-security)
-[![MCP tools: 35](https://img.shields.io/badge/MCP_tools-35-5ee7b1?style=flat-square)](#mcp-tools-35)
+[![MCP tools: 41](https://img.shields.io/badge/MCP_tools-41-5ee7b1?style=flat-square)](#mcp-tools-41)
 
 **Omeety Terminal is a browser exoskeleton for CLI agents: a real local
 terminal in the Edge/Chrome side panel that gives Codex, Claude Code, Kimi Code,
 and any MCP-capable CLI the same eyes and hands for your active web page.**
 
 [3-minute quick start](#3-minute-quick-start) · [Why Omeety](#why-omeety) ·
-[How it works](#how-it-works) · [35 MCP tools](#mcp-tools-35) ·
+[How it works](#how-it-works) · [41 MCP tools](#mcp-tools-41) ·
 [Security](#known-limitations-and-security) · [Contributing](CONTRIBUTING.md)
 
 ![Omeety inspecting and operating the active tab through the real MCP path](docs/images/omeety-demo.gif)
 
 > This reproducible demo uses a deterministic local MCP client and the real
 > extension, Native Messaging, ConPTY, and browser-tool path. Codex, Claude Code,
-> and Kimi Code use the same 35 tools. No model account or prerecorded model
+> and Kimi Code use the same 41 tools. No model account or prerecorded model
 > response is involved.
 
 There is no dedicated chat mode or model switch. Omeety remains a real shell:
@@ -130,21 +130,23 @@ another closed agent:
 The immediate priorities are **reliability and measurable performance**:
 terminal I/O and browser tools must report real outcomes, survive navigation,
 and retain their resource/throughput baseline. Continuous selection, Context
-Bundle v1, and post-action verification are implemented; cross-origin iframe
-fallbacks and finer network telemetry are next.
+Bundle v1, Browser Core v2, cross-origin iframe observation, and post-action
+verification are implemented; finer network telemetry is next.
 
 ## How it works
 
 ```text
 Side-panel extension [ xterm.js terminal ]  <- Native Messaging ->  local Node host
                                                                   |- PTY: real shell I/O
+                                                                  |- Browser Core: targets, policy,
+                                                                  |  transactions, metrics, audit
                                                                   |- download core: tasks, ranges,
                                                                   |  verification, atomic publish
                                                                   `- MCP Streamable HTTP
                                                                      http://127.0.0.1:49171/mcp
                                                                             ^
                                                        claude / codex / kimi connect here
-                                                       browser tools -> content.js -> active tab
+                                                       browser tools -> Browser Adapter/CDP + content.js
                                                        download tools -> local host core
 ```
 
@@ -153,7 +155,10 @@ Side-panel extension [ xterm.js terminal ]  <- Native Messaging ->  local Node h
   reclaim them after 30 idle minutes, or end them when the panel closes.
 - Reopening the panel asks the host for its live session list, restores every
   running terminal tab, and replays a limited recent-output buffer.
-- One local process handles terminal I/O, the PTY, and the MCP server.
+- Browser Core centralizes targets, policy, and high-level tools in the Host;
+  the extension-side Browser Adapter recursively observes out-of-process frames
+  and workers without adding a separate resident backend.
+- One local process handles terminal I/O, the PTY, Browser Core, downloads, and MCP.
 
 ## Prerequisite: a local Native Messaging host
 
@@ -211,10 +216,10 @@ Then load the extension:
    that a real terminal has full local user permissions.
 2. At the system shell prompt (PowerShell on Windows, zsh on macOS), run
    `claude`, `codex`, or `kimi`.
-3. Inside an agent, verify that `omeety_terminal` and its 35 `omeety_*` tools
+3. Inside an agent, verify that `omeety_terminal` and its 41 `omeety_*` tools
    are connected, then ask the agent to describe or operate the active page.
-4. Use Settings to select a shell, configure per-tab scrollback, and choose the
-   session policy used after the side panel closes.
+4. Use Settings to select a shell, configure per-tab scrollback and session
+   policy, and choose the browser permission mode.
 
 ## Common use cases
 
@@ -260,13 +265,34 @@ Once installed, drive the browser from your agent in plain language:
   again to remove it), then press Enter or Finish picking. Stable `pick-1..N`
   references and a compact summary are inserted without an Enter keystroke.
 
-## MCP tools (35)
+## MCP tools (41)
 
-Thirty-two tools provide browser eyes and hands. Three MCP-first tools extend
+Thirty-eight tools provide browser eyes and hands. Three MCP-first tools extend
 that reach into reliable local file transfer. Codex, Claude Code, Kimi Code,
 and other MCP agents use the same contract.
 
-### Browser tools (32)
+### Browser Core high-level tools (7)
+
+`omeety_browser_observe`, `omeety_browser_query`, `omeety_browser_act`,
+`omeety_browser_transaction`, `omeety_browser_wait`, `omeety_browser_tabs`, and
+`omeety_browser_status` provide stable entry points for target locking, policy
+checks, post-action verification, recovery, metrics, and redacted auditing.
+All existing tools remain available, so current agent prompts and calls do not
+need migration.
+
+Deep observation merges DOMSnapshot, Accessibility Tree, and frame topology
+from the main document and out-of-process iframes. When a rerender invalidates
+an old `uN`, the composite locator recovers by role, label, text, attributes,
+parent, and geometry; ambiguous matches fail closed.
+
+Observation defaults to a compact snapshot without duplicated long CSS paths.
+Semantic queries promote text leaves to their nearest clickable ancestor. Action
+results distinguish `dispatched`, `applied`, and `committed`; the last level requires
+`expect.persistAfterReload:true` and a successful post-reload check. Key presses support
+Meta/Control/Alt/Shift modifiers, and screenshots pinned to inactive tabs use CDP so
+they cannot capture the foreground tab by mistake.
+
+### Low-level browser tools (31)
 
 **Inspect and retrieve:** `omeety_get_context_bundle` (structured element
 context plus cropped image), `omeety_get_page_snapshot` (stable UIDs and

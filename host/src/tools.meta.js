@@ -6,11 +6,15 @@ const EXPECTATION_SCHEMA = {
     selector: { type: "string" }, text: { type: "string" },
     selectorGone: { type: "string" }, textGone: { type: "string" },
     urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
+    targetUid: { type: "string" }, targetSelector: { type: "string" },
     valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+    persistAfterReload: { type: "boolean", description: "Reload after the condition matches and require it to remain true before reporting committed." },
     match: { type: "string", enum: ["all", "any"], default: "all" },
     timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
   },
 }
+const WAIT_EXPECTATION_PROPERTIES = { ...EXPECTATION_SCHEMA.properties }
+delete WAIT_EXPECTATION_PROPERTIES.persistAfterReload
 
 const TRANSACTION_STEP_SCHEMA = {
   type: "object",
@@ -18,6 +22,7 @@ const TRANSACTION_STEP_SCHEMA = {
     action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select", "wait", "reload", "navigate", "evaluate"] },
     uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
     text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
+    modifiers: { type: "array", uniqueItems: true, items: { type: "string", enum: ["Meta", "Control", "Alt", "Shift"] } },
     cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" }, verify: { type: "boolean" },
     refocus: { type: "boolean" }, inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] },
     commitKey: { type: "string", enum: ["Enter", "Tab"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 },
@@ -30,6 +35,83 @@ const TRANSACTION_STEP_SCHEMA = {
 }
 
 export const TOOLS = [
+  {
+    name: "omeety_browser_observe",
+    description: "Browser Core observation. Defaults to a compact snapshot without duplicated CSS paths. Use profile:'standard' for full locator paths or deep:true for CDP DOMSnapshot, Accessibility and frame/target summaries.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "integer" }, deep: { type: "boolean", default: false },
+        profile: { type: "string", enum: ["compact", "standard"], default: "compact" },
+        maxTextLength: { type: "integer", minimum: 0, maximum: 60000, default: 6000 },
+        maxInteractive: { type: "integer", minimum: 1, maximum: 500, default: 120 },
+        maxAccessibilityNodes: { type: "integer", minimum: 1, maximum: 500, default: 160 },
+        sinceSnapshotId: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "omeety_browser_query",
+    description: "Find and rank interactive elements by text, accessible name, role or CSS selector. Returns stable uid locators that survive common SPA rerenders.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "integer" }, query: { type: "string" }, role: { type: "string" }, selector: { type: "string" },
+        visibleOnly: { type: "boolean", default: true }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+      },
+    },
+  },
+  {
+    name: "omeety_browser_act",
+    description: "Perform one Browser Core action with target pinning and verification. completionLevel is dispatched, applied, or committed; committed requires expect.persistAfterReload:true and a post-reload match.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "integer" }, action: { type: "string", enum: ["click", "click_text", "fill", "type", "press", "select"] },
+        uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" },
+        text: { type: "string" }, value: { type: "string" }, key: { type: "string" }, exact: { type: "boolean" }, clear: { type: "boolean" },
+        modifiers: { type: "array", uniqueItems: true, items: { type: "string", enum: ["Meta", "Control", "Alt", "Shift"] } },
+        cdp: { type: "boolean" }, confirmed: { type: "boolean" }, backgroundTask: { type: "boolean" }, verify: { type: "boolean", default: true }, expect: EXPECTATION_SCHEMA,
+        timeoutMs: { type: "integer", minimum: 500, maximum: 60000 }, inputMode: { type: "string", enum: ["insertText", "keyEvents", "composition"] },
+        refocus: { type: "boolean" }, commitKey: { type: "string", enum: ["Enter", "Tab"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 },
+        settleMs: { type: "integer", minimum: 50, maximum: 2000 },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "omeety_browser_transaction",
+    description: "Run 1-20 pinned browser steps as an auditable transaction. Stops at the first semantic failure by default and returns exact per-step timing and recovery information.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "integer" }, steps: { type: "array", minItems: 1, maxItems: 20, items: TRANSACTION_STEP_SCHEMA },
+        stopOnError: { type: "boolean", default: true }, confirmed: { type: "boolean" }, retryRecoverable: { type: "boolean", default: true },
+      },
+      required: ["steps"],
+    },
+  },
+  {
+    name: "omeety_browser_wait",
+    description: "Wait across reloads, navigations and BFCache for page, URL, text or target-value postconditions.",
+    inputSchema: { type: "object", properties: { tabId: { type: "integer" }, ...WAIT_EXPECTATION_PROPERTIES } },
+  },
+  {
+    name: "omeety_browser_tabs",
+    description: "List, open, switch or close browser tabs through one Browser Core entry point.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["list", "open", "switch", "close"], default: "list" },
+        tabId: { type: "integer" }, url: { type: "string" }, active: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "omeety_browser_status",
+    description: "Return Browser Core health, policy, target/frame registry, reliability metrics and optionally recent redacted audit/events.",
+    inputSchema: { type: "object", properties: { includeEvents: { type: "boolean" }, includeAudit: { type: "boolean" } } },
+  },
   {
     name: "omeety_get_page_snapshot",
     description:
@@ -217,7 +299,7 @@ export const TOOLS = [
     description: "Dispatch a key on a target. With cdp:true, named keys use trusted keydown/up and printable characters use trusted keydown/char/keyup with correct KeyA/Digit1 codes. Set refocus:false to keep the current focused editor. Leaves a yellow bar.",
     inputSchema: {
       type: "object",
-      properties: { key: { type: "string" }, uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" }, cdp: { type: "boolean" }, refocus: { type: "boolean" } },
+      properties: { key: { type: "string" }, modifiers: { type: "array", uniqueItems: true, items: { type: "string", enum: ["Meta", "Control", "Alt", "Shift"] } }, uid: { type: "string" }, selector: { type: "string" }, x: { type: "number" }, y: { type: "number" }, cdp: { type: "boolean" }, refocus: { type: "boolean" } },
       required: ["key"],
     },
   },
@@ -251,8 +333,8 @@ export const TOOLS = [
   },
   {
     name: "omeety_capture_visible_tab",
-    description: "Screenshot the visible area of the active tab (returns a JPEG data URL, downscaled; result also carries image.width/height and coordinateSpace). ONLY useful if YOU are a multimodal/vision model that can analyze images. IMPORTANT: the image is in PHYSICAL pixels; click_at / snapshot.bbox use CSS pixels — map screenshot coords to CSS via CSS_x = screenshot_x × (viewport.width / image.width), using viewport.devicePixelRatio from omeety_get_page_snapshot. Text-only models CANNOT interpret this image — prefer omeety_get_page_snapshot.",
-    inputSchema: { type: "object", properties: {} },
+    description: "Screenshot a tab's visible viewport. Active tabs use captureVisibleTab; an explicitly pinned inactive tab uses CDP so the image cannot come from the wrong tab. Returns a downscaled JPEG data URL with dimensions and coordinateSpace.",
+    inputSchema: { type: "object", properties: { tabId: { type: "integer" }, maxWidth: { type: "integer", minimum: 320, maximum: 1280 } } },
   },
   {
     name: "omeety_upload_file",

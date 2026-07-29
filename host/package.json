@@ -1,6 +1,6 @@
 {
   "name": "omeety-terminal-host",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Omeety Terminal native messaging host: PTY + browser-control MCP",
@@ -10,8 +10,9 @@
   },
   "scripts": {
     "postinstall": "node scripts/fix-node-pty-permissions.cjs",
-    "test": "npm run test:runtime && npm run test:replay && npm run test:log && npm run test:download && npm run test:smoke",
+    "test": "npm run test:runtime && npm run test:core && npm run test:replay && npm run test:log && npm run test:download && npm run test:smoke",
     "test:runtime": "node ../_test/extension-runtime-regression.mjs",
+    "test:core": "node ../_test/browser-core.mjs",
     "test:replay": "node ../_test/output-replay-buffer.mjs",
     "test:log": "node ../_test/log-rotation.mjs",
     "test:download": "node ../_test/download-manager.mjs",

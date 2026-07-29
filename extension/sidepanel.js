@@ -13,6 +13,7 @@ const shellSelect = $("shellSelect")
 const shellCustom = $("shellCustom")
 const scrollbackSelect = $("scrollbackSelect")
 const keepAliveSelect = $("keepAliveSelect")
+const browserPermissionSelect = $("browserPermissionSelect")
 
 let panelPort = null
 let curSettings = null
@@ -425,6 +426,7 @@ function applyAckGate() {
   shellSelect.value = knownShells.has(curSettings.shell) ? curSettings.shell : "custom"
   scrollbackSelect.value = [3000, 5000, 10000, 20000].includes(Number(curSettings.scrollback)) ? String(curSettings.scrollback) : "5000"
   keepAliveSelect.value = ["always", "30m", "close"].includes(curSettings.keepAliveMode) ? curSettings.keepAliveMode : "always"
+  browserPermissionSelect.value = ["read", "act", "submit"].includes(curSettings.browserPermissionMode) ? curSettings.browserPermissionMode : "submit"
   document.querySelectorAll("#shellSelect option[data-platform]").forEach((option) => {
     option.hidden = isMac ? option.dataset.platform === "windows" : option.dataset.platform === "unix"
   })
@@ -463,7 +465,6 @@ $("pickBtn").addEventListener("click", () => {
 })
 
 $("tabNew").addEventListener("click", () => newTab())
-
 // 终端 tab 快捷键（Ctrl+Alt 系：Ctrl+T/W/Tab 被浏览器占用到不了页面；Alt+字母和 readline 的
 // Alt+b/Alt+f、Alt+数字参数冲突，所以选 Ctrl+Alt）。
 //   Ctrl+Alt+T 新终端 · Ctrl+Alt+W 关闭当前 · Ctrl+Alt+←/→ 左右切换
@@ -501,11 +502,12 @@ $("saveBtn").addEventListener("click", async () => {
   const shell = resolvedShell() || "auto"
   const scrollback = Number(scrollbackSelect.value) || 5000
   const keepAliveMode = keepAliveSelect.value
+  const browserPermissionMode = browserPermissionSelect.value
   const previousShell = curSettings.shell
   const button = $("saveBtn")
   button.disabled = true
   try {
-    curSettings = await saveSettings({ shell, scrollback, keepAliveMode })
+    curSettings = await saveSettings({ shell, scrollback, keepAliveMode, browserPermissionMode })
     for (const [, tab] of tabs) tab.term?.setScrollback?.(scrollback)
     send({ type: "settings_changed" })
     setSettingsOpen(false)
@@ -520,6 +522,7 @@ $("saveBtn").addEventListener("click", async () => {
 
 // 工具按类别分组渲染（结构化，便于查看）。name 不在下列表里的归"其他"。
 const TOOL_CATEGORIES = [
+  { title: "Browser Core v2", names: ["omeety_browser_observe", "omeety_browser_query", "omeety_browser_act", "omeety_browser_transaction", "omeety_browser_wait", "omeety_browser_tabs", "omeety_browser_status"] },
   { title: "页面理解 / Context Bundle", names: ["omeety_get_context_bundle", "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_capture_visible_tab", "omeety_get_user_picks", "omeety_fetch_with_cookie", "omeety_get_console_logs"] },
   { title: "动作事务 / 元素操作", names: ["omeety_act_and_verify", "omeety_click", "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select", "omeety_hover", "omeety_scroll"] },
   { title: "等待", names: ["omeety_wait_for"] },
