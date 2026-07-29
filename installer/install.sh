@@ -27,8 +27,25 @@ if [[ -z "${node_bin}" || -z "${npm_bin}" ]]; then
 fi
 ok "node = ${node_bin} ($(${node_bin} --version))"
 
-step "安装 host 依赖"
-(cd "${host_dir}" && "${npm_bin}" install --no-audit --no-fund)
+step "准备 host 依赖"
+missing_module=""
+for module_path in \
+  "node-pty" \
+  "@modelcontextprotocol/sdk" \
+  "express" \
+  "undici"; do
+  if [[ ! -d "${host_dir}/node_modules/${module_path}" ]]; then
+    missing_module="${module_path}"
+    break
+  fi
+done
+if [[ -n "${missing_module}" ]]; then
+  (cd "${host_dir}" && "${npm_bin}" install --no-audit --no-fund)
+  ok "依赖已安装"
+else
+  ok "离线依赖已存在，跳过 npm install"
+fi
+"${node_bin}" "${host_dir}/scripts/fix-node-pty-permissions.cjs"
 ok "node-pty / MCP SDK / Express / undici 已就绪"
 
 step "生成 Native Messaging 启动脚本"
