@@ -35,6 +35,8 @@ Browser Core v2, durable browser actions, and cross-frame reliability / Browser 
   query/snapshot payloads, improving SPA contact/menu accuracy while reducing transfer work.
 - Gate navigation and reload postconditions on a new document epoch so text left in
   the old document cannot produce a false success.
+- Make the macOS offline installer reuse bundled dependencies and clear the
+  browser quarantine attribute from bundled `node-pty` binaries before launch.
 
 - Let browser tools pin an explicit `tabId`, so a user's mid-task tab switch no
   longer redirects a pending action or wait to the wrong page.
