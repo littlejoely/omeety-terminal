@@ -731,6 +731,16 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
     resize: applyFit,
     focus() { if (!_disposed) term.focus() },
     clear() { if (!_disposed) term.clear() },
+    reset() {
+      if (_disposed) return
+      if (_rafId) cancelAnimationFrame(_rafId)
+      _rafId = 0
+      if (_coalesceT) clearTimeout(_coalesceT)
+      _coalesceT = 0
+      _scheduled = false
+      _pending = ""
+      try { term.reset() } catch { term.clear() }
+    },
     setActive(active) {
       if (_disposed) return
       renderActive = !!active

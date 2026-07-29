@@ -30,4 +30,17 @@ const oversized = new OutputReplayBuffer(4)
 oversized.push("term", "abcdefgh")
 assert.equal(oversized.read("term"), "abcdefgh")
 
+// A genuinely new shell clears only its own previous generation; other tabs
+// keep their replay history intact.
+const generations = new OutputReplayBuffer(64)
+generations.push("first", "old prompt % ")
+generations.push("second", "keep me")
+generations.clear("first")
+assert.equal(generations.read("first"), "")
+assert.equal(generations.read("second"), "keep me")
+assert.equal(generations.totalLength, "keep me".length)
+generations.clear()
+assert.equal(generations.entryCount, 0)
+assert.equal(generations.totalLength, 0)
+
 console.log("PASS output replay buffer: bounded amortized-O(1) eviction")
