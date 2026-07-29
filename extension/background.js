@@ -10,6 +10,9 @@ import { getPrintableKeyDescriptor, getPrimaryModifier, normalizeCdpInputMode } 
 const NM_NAME = "com.omeety.terminal"
 
 let nativePort = null
+let lastNativePingAt = null
+let lastNativePongAt = null
+let lastNativeRoundTripMs = null
 const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel"}) 连进来
 const panelConfirmations = new Map() // id -> { resolve, timer }，下载等 host 本地工具也能在侧栏确认
 let lastPick = null // 最近一个选取（侧栏 pick_result 广播用；连续选取见 lastPickSet）
@@ -47,6 +50,10 @@ function getRuntimeMetrics() {
     startedAt: new Date(runtimeStartedAt).toISOString(),
     uptimeMs: Date.now() - runtimeStartedAt,
     nativeConnected: !!nativePort,
+    nativeHealth: nativePort ? (lastNativePongAt ? "responsive" : "checking") : "disconnected",
+    lastNativePingAt: lastNativePingAt ? new Date(lastNativePingAt).toISOString() : null,
+    lastNativePongAt: lastNativePongAt ? new Date(lastNativePongAt).toISOString() : null,
+    lastNativeRoundTripMs,
     panelConnections: panelPorts.size,
     replayBufferBytes: outputBuf.totalLength,
     replayBufferChunks: outputBuf.entryCount,
@@ -109,6 +116,8 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 // ---------- native port ----------
 function connectNative() {
   if (nativePort) return
+  lastNativePongAt = null
+  lastNativeRoundTripMs = null
   try {
     nativePort = chrome.runtime.connectNative(NM_NAME)
   } catch (e) {
@@ -118,7 +127,12 @@ function connectNative() {
   nativePort.onMessage.addListener((msg) => {
     if (msg?.type === "tool_call") {
       void handleToolCall(msg)
+    } else if (msg?.type === "pong") {
+      lastNativePongAt = Date.now()
+      const sentAt = Number(msg.sentAt)
+      lastNativeRoundTripMs = Number.isFinite(sentAt) && sentAt > 0 ? Math.max(0, lastNativePongAt - sentAt) : null
     } else {
+      if (msg?.type === "session_reset") outputBuf.clear(msg.sid || "default")
       broadcast(msg) // output / status → 面板
       if (msg?.type === "output" && typeof msg.data === "string") pushOutput(msg.sid || "default", msg.data)
     }
@@ -148,12 +162,13 @@ async function notifyPanelState(open) {
   sendNative({ type: "panel_state", open: actualOpen, keepAliveMode: settings.keepAliveMode })
 }
 
-// 心跳保活：只要 native 连着就每 8s 给 host 发 ping（面板关了也发——offscreen 让 SW 活着，
-// 心跳让 host 的静默看门狗不触发，PTY 因此活过侧栏关闭）。
+// Native Messaging 长连接本身负责保活；ping 只记录连接健康和往返延迟，
+// 即使浏览器后台调度延迟也不会因此关闭 Host/PTY。
 setInterval(() => {
   if (nativePort) {
     try {
-      nativePort.postMessage({ type: "ping" })
+      lastNativePingAt = Date.now()
+      nativePort.postMessage({ type: "ping", sentAt: lastNativePingAt })
     } catch {
       /* port closed */
     }

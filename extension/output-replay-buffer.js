@@ -37,6 +37,26 @@ export class OutputReplayBuffer {
     return result
   }
 
+  clear(sid) {
+    if (typeof sid === "undefined") {
+      this.entries = []
+      this.head = 0
+      this.totalLength = 0
+      return
+    }
+    const kept = []
+    let keptLength = 0
+    for (let i = this.head; i < this.entries.length; i++) {
+      const entry = this.entries[i]
+      if (entry.sid === sid) continue
+      kept.push(entry)
+      keptLength += entry.data.length
+    }
+    this.entries = kept
+    this.head = 0
+    this.totalLength = keptLength
+  }
+
   get entryCount() {
     return this.entries.length - this.head
   }

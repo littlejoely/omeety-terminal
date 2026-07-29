@@ -10,7 +10,6 @@ import { log } from "./log.js"
 const MCP_PORT = Number(process.env.OMEETY_MCP_PORT) || 49171
 const ptys = new Map() // sid(会话 id) -> ptyApi。多终端 tab：每个 tab 一个独立 PTY。
 const sessionMeta = new Map() // sid -> 可恢复的 tab 元数据（标题、shell、兼容开关、创建时间）
-let lastMsgAt = Date.now() // 最近一次收到 native 消息的时间；心跳保活的判据
 const sidOf = (msg) => (msg && msg.sid) || "default" // 无 sid 走默认会话（兼容旧的单 tab 行为）
 let panelOpen = true // host 由首次打开侧栏触发，后续由 panel_state 精确更新
 let panelDetachedAt = 0
@@ -70,14 +69,10 @@ log("boot", {
 
 startMcpHttp({ port: MCP_PORT, nmSend })
 
-// 静默看门狗：扩展每 8s 发 ping。若 25s 没收到任何 native 消息，说明 SW 已回收 / 面板已关，
-// 但本进程没拿到 stdin EOF（Edge 有时不及时关管道）→ 主动退出，释放 49171，避免变僵尸坑下次连接。
+// 这里只执行用户明确选择的侧栏空闲策略。Native Messaging 管道的 EOF/error
+// 才代表浏览器连接真正结束；不能用浏览器后台定时器的延迟来推断掉线，否则系统
+// 睡眠或 Service Worker 调度变慢时会误杀仍正常运行的 PTY。
 setInterval(() => {
-  if (Date.now() - lastMsgAt > 25000) {
-    log("silence watchdog: 25s 无 native 消息，判定连接已断，退出")
-    cleanup(0)
-    return
-  }
   if (!panelOpen && keepAliveMode === "30m" && panelDetachedAt && Date.now() - panelDetachedAt >= 30 * 60 * 1000) {
     log("session idle watchdog: 侧栏关闭超过 30 分钟，结束保活会话")
     cleanup(0)
@@ -85,7 +80,6 @@ setInterval(() => {
 }, 5000)
 
 startNmReader((msg) => {
-  lastMsgAt = Date.now()
   // ping and dynamic terminal-title metadata are high-frequency bookkeeping.
   // Logging either one creates needless disk writes while a CLI spinner is
   // updating the window title; state changes remain visible in explicit logs.
@@ -93,6 +87,10 @@ startNmReader((msg) => {
     log("nm in", msg?.type, msg?.shell ? "shell=" + msg.shell : "", msg?.cols ?? "", msg?.rows ?? "")
   }
   switch (msg?.type) {
+    case "ping":
+      // 健康探测只回报连接状态，不参与 PTY/Host 的生命周期判定。
+      nmSend({ type: "pong", sentAt: Number(msg.sentAt) || null, at: Date.now() })
+      break
     case "hello": {
       // 扩展连上后第一条：带 sid + shell + 尺寸。据此 spawn 该 tab 的 PTY（已存在则只 resize）。
       const sid = sidOf(msg)
@@ -191,6 +189,9 @@ function spawnShell(sid, shellChoice, cols, rows) {
   try {
     const { cmd, args } = resolveShell(shellChoice)
     log("spawnShell start sid=" + sid, cmd, JSON.stringify(args), "cols=" + cols, "rows=" + rows)
+    // 明确区分“重新连接现有 PTY”和“真正新建 shell”。后台与面板收到此事件后
+    // 会清掉同 sid 的旧回放/旧画面，避免新提示符叠加在上一代 shell 上。
+    nmSend({ type: "session_reset", sid })
     const ptyApi = startPty({
       shell: cmd,
       args,
