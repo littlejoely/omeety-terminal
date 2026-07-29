@@ -60,3 +60,10 @@ export function getPrimaryModifier(platform = "") {
     ? { key: "Meta", code: "MetaLeft", windowsVirtualKeyCode: 91, modifiers: 4 }
     : { key: "Control", code: "ControlLeft", windowsVirtualKeyCode: 17, modifiers: 2 }
 }
+
+const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 }
+
+export function getModifierMask(modifiers = []) {
+  return [...new Set(Array.isArray(modifiers) ? modifiers : [])]
+    .reduce((mask, name) => mask | (MODIFIER_BITS[name] || 0), 0)
+}

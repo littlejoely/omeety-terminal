@@ -42,7 +42,6 @@ body {
   flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; /* 第二行有整行空间，超长仍省略号、不换行 */
 }
-
 button {
   font: inherit; cursor: pointer;
   border: 1px solid var(--border); background: var(--bg); color: var(--fg);

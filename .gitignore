@@ -17,6 +17,7 @@ host/host-manifest.json
 host/run-host.bat
 host/run-host.sh
 host/host-debug.log
+host/browser-audit.jsonl*
 
 # Browser profiles and local diagnostics may contain login state or page data
 _pwtest/*
@@ -26,6 +27,7 @@ _pwtest/*
 !_pwtest/test_cursor_active_codex.py
 !_pwtest/test_ime_composition.py
 !_pwtest/test_browser_tool_reliability.py
+!_pwtest/test_browser_core_v2.mjs
 !_pwtest/test_settings_reconnect.py
 !_pwtest/test_tab_render_budget.py
 !_pwtest/test_paste_protocol.py

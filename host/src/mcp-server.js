@@ -8,6 +8,7 @@ import { TOOLS } from "./tools.meta.js"
 import { relayCall } from "./relay.js"
 import { log } from "./log.js"
 import { DownloadManager } from "./download-manager.js"
+import { BrowserCore } from "./browser-core/index.js"
 
 function safeStr(v) {
   try {
@@ -40,7 +41,7 @@ export function makeToolContent(result) {
   return [{ type: "text", text: safeStr(textResult) }, ...images]
 }
 
-function makeServer(nmSend, downloadManager) {
+function makeServer(nmSend, downloadManager, browserCore) {
   const server = new Server({ name: "omeety-terminal", version: "1.0.0" }, { capabilities: { tools: {} } })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
@@ -52,7 +53,7 @@ function makeServer(nmSend, downloadManager) {
         const result = await downloadManager.handleTool(name, args || {})
         return { content: makeToolContent(result) }
       }
-      const r = await relayCall(nmSend, name, args)
+      const r = await browserCore.call(name, args || {})
       return r.ok
         ? { content: makeToolContent(r.result) }
         : { isError: true, content: [{ type: "text", text: String(r.error) }] }
@@ -74,6 +75,9 @@ export function startMcpHttp({ port, nmSend }) {
       return Boolean(response.ok && response.result?.approved)
     },
   })
+  const browserCore = new BrowserCore({
+    dispatch: (name, args) => relayCall(nmSend, name, args),
+  })
   let resumedDownloads = false
 
   const sessions = new Map() // sessionId -> { transport, server }
@@ -82,7 +86,7 @@ export function startMcpHttp({ port, nmSend }) {
   // 每个请求使用独立 server/transport，不需要维护 session，也不会和 legacy SSE 会话串线。
   app.post("/mcp", async (req, res) => {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const server = makeServer(nmSend, downloadManager)
+    const server = makeServer(nmSend, downloadManager, browserCore)
     let closed = false
     const close = () => {
       if (closed) return
@@ -121,7 +125,7 @@ export function startMcpHttp({ port, nmSend }) {
 
   app.get("/sse", async (_req, res) => {
     const transport = new SSEServerTransport("/messages", res)
-    const server = makeServer(nmSend, downloadManager)
+    const server = makeServer(nmSend, downloadManager, browserCore)
     sessions.set(transport.sessionId, { transport, server })
     log("mcp /sse new session", transport.sessionId)
     res.on("close", () => {
@@ -179,5 +183,5 @@ export function startMcpHttp({ port, nmSend }) {
     })
   }
   listenWithRetry()
-  return { downloadManager }
+  return { downloadManager, browserCore }
 }

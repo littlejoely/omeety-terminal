@@ -70,6 +70,13 @@
       </select>
       <p class="muted small">重新打开侧栏时会恢复仍在运行的全部终端 Tab；退出浏览器仍会结束会话。</p>
 
+      <label>浏览器操作权限</label>
+      <select id="browserPermissionSelect">
+        <option value="read">只读</option>
+        <option value="act">允许操作，不允许提交</option>
+        <option value="submit">允许操作，危险提交仍需确认</option>
+      </select>
+
       <label>MCP 端口</label>
       <input id="mcpPort" type="text" value="49171" readonly />
       <p class="muted small">claude/codex/kimi 的配置在安装时自动写入：<code>http://127.0.0.1:49171/mcp</code></p>

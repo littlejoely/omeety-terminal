@@ -25,6 +25,10 @@ the scripts from this directory with Python and Playwright installed.
 - `test_browser_tool_reliability.py` uses a temporary profile and local strict-CSP
   pages to verify CDP `execute_js` and click/wait recovery across navigation. It
   uses a test-only MCP port and does not touch the normal Edge profile.
+- `test_browser_core_v2.mjs` uses a temporary Playwright Chromium profile and
+  local main/cross-origin pages to verify composite-locator recovery, incremental
+  snapshots, recursive OOPIF DOMSnapshot/Accessibility observation, and the
+  420px side-panel permission/status layout. It does not read a personal profile.
 - `capture_launch_assets.py` records the public README GIF and social preview
   through the real extension/Native Messaging/ConPTY/MCP path. Its deterministic
   demo client is `launch_demo_agent.mjs`; no model account or network is needed.

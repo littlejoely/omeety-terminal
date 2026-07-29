@@ -13,6 +13,9 @@ const DANGEROUS_RE = /(提交|保存|删除|作废|下架|审核|确认|同意|�
 const patchStore = new Map()
 let browserSessionId = null
 let lastPageSnapshot = null
+const locatorMemory = new Map()
+const locatorRecovery = { attempts: 0, recovered: 0, ambiguous: 0, failed: 0, last: null }
+const LOCATOR_MEMORY_MAX = 2000
 
 // 自包含模式只处理工具执行请求；不再有 Codeg bootstrap / xyy_* 混淆 shim / 注册逻辑。
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -201,6 +204,8 @@ async function executeTool(tool, args) {
   switch (tool) {
     case "omeety_get_page_snapshot":
       return getPageSnapshot(args)
+    case "omeety_browser_query":
+      return browserQuery(args)
     case "omeety_get_selected_context":
       return getSelectedContext()
     case "omeety_get_context_bundle":
@@ -243,6 +248,7 @@ async function executeTool(tool, args) {
 async function getPageSnapshot(args = {}) {
   const started = performance.now()
   const mode = args.mode === "detailed" ? "detailed" : "light"
+  const profile = ["compact", "standard"].includes(args.profile) ? args.profile : "standard"
   const includeElements = args.includeElements === undefined ? mode === "detailed" : Boolean(args.includeElements)
   const defaultTextLength = includeElements ? 12000 : 4000
   const maxTextLength = clamp(Number(args.maxTextLength ?? defaultTextLength), 0, 60000)
@@ -253,10 +259,12 @@ async function getPageSnapshot(args = {}) {
     title: document.title,
     auth: null,
     mode,
+    profile,
     selection: String(getSelection()?.toString() || "").trim().slice(0, 4000),
     visibleText: collectVisibleText(maxTextLength),
     overview: getPageOverview(),
     topology: inspectDocumentTopology(),
+    locatorRecovery: { ...locatorRecovery, remembered: locatorMemory.size },
     // 坐标空间元数据：snapshot.interactive[].bbox 与 omeety_click_at 都是 CSS 像素，
     // 但 omeety_capture_visible_tab 返回物理像素（= CSS × devicePixelRatio）。agent 从截图读坐标
     // 点击时必须除以 devicePixelRatio 换算，否则 dpr≠1（如 1.5）时必偏移。
@@ -290,7 +298,7 @@ async function getPageSnapshot(args = {}) {
   }
   // 可交互元素 + 稳定 uid（每次快照重新打标）。agent 拿 uid 去调 click/fill/type，比猜动态 selector 稳。
   // 默认 120 与 tools.meta.js 的 maxInteractive default 对齐（之前这里写 60 导致大列表被砍）。
-  snapshot.interactive = listInteractive(Number(args.maxInteractive) || 120)
+  snapshot.interactive = listInteractive(Number(args.maxInteractive) || 120, { compact: profile === "compact" })
   return finalizePageSnapshot(snapshot, args, started)
 }
 
@@ -322,7 +330,7 @@ function finalizePageSnapshot(snapshot, args, started) {
     }
   }
   // detailed 模式包含表格/表单等多类数组；先保持完整返回，避免客户端合并时丢字段。
-  if (!previous || previous.snapshotId !== since || snapshot.mode === "detailed") {
+  if (!previous || previous.snapshotId !== since || snapshot.mode === "detailed" || previous.profile !== snapshot.profile) {
     return {
       ...snapshot,
       incremental: false,
@@ -405,15 +413,20 @@ function inspectDocumentTopology() {
 // 深度查询：穿透 shadow DOM。复杂 SPA（飞书/企业应用）把导航、会话列表、搜索框大量藏在 shadow root 里，
 // 普通 querySelectorAll 查不到 → snapshot 漏采 → agent 找不到元素。这里递归进每个 shadowRoot，带深度/数量上限防失控。
 function queryAllDeep(selector, root = document, acc = [], depth = 0) {
-  if (depth > 15 || acc.length > 5000) return acc
+  if (depth > 15 || acc.length >= 5000) return acc
   try {
-    for (const el of root.querySelectorAll(selector)) acc.push(el)
+    for (const el of root.querySelectorAll(selector)) {
+      if (acc.length >= 5000) break
+      acc.push(el)
+    }
   } catch {
     /* ignore */
   }
+  if (acc.length >= 5000) return acc
   try {
     for (const el of root.querySelectorAll("*")) {
       if (el.shadowRoot) queryAllDeep(selector, el.shadowRoot, acc, depth + 1)
+      if (acc.length >= 5000) break
     }
   } catch {
     /* ignore */
@@ -421,6 +434,7 @@ function queryAllDeep(selector, root = document, acc = [], depth = 0) {
   // 同源 iframe 可以直接读取并操作；跨域 iframe 由 topology 标记为受限，后续走 CDP/视觉兜底。
   try {
     for (const frame of root.querySelectorAll("iframe,frame")) {
+      if (acc.length >= 5000) break
       try {
         if (frame.contentDocument) queryAllDeep(selector, frame.contentDocument, acc, depth + 1)
       } catch {
@@ -445,17 +459,19 @@ function uidFor(el) {
     uidMap.set(el, u)
   }
   el.setAttribute("data-omeety-uid", u)
+  rememberLocator(u, el)
   return u
 }
 
-function listInteractive(max = 120) {
+const INTERACTIVE_SELECTOR =
+  'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="textbox"], [role="listitem"], [role="row"], [role="cell"], [role="gridcell"], [role="treeitem"], [contenteditable], [tabindex]:not([tabindex="-1"]), [onclick], li, tr, [class*="search" i]'
+
+function listInteractive(max = 120, options = {}) {
   // 选择器：交互控件 + 列表/菜单/表格行项。之前缺 listitem/row/cell/li/tr 等，导致飞书会话列表、
   // 下拉菜单整列被折叠成父容器的单个 region，item 级拿不到 uid，agent 只能 execute_js 算坐标点。
   // 注：纯 div 的 SPA 列表项（如飞书会话项，无 role/onclick）仍选不中——那种用 omeety_click_text 按文本点。
-  const SEL =
-    'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="textbox"], [role="listitem"], [role="row"], [role="cell"], [role="gridcell"], [role="treeitem"], [contenteditable], [tabindex]:not([tabindex="-1"]), [onclick], li, tr, [class*="search" i]'
   const seen = new Set()
-  const els = queryAllDeep(SEL).filter((el) => {
+  const els = queryAllDeep(INTERACTIVE_SELECTOR).filter((el) => {
     if (seen.has(el)) return false
     seen.add(el)
     return isVisible(el)
@@ -468,20 +484,27 @@ function listInteractive(max = 120) {
   const highs = els.filter(isHigh)
   const lows = els.filter((el) => !isHigh(el))
   const picked = highs.slice(0, max).concat(lows.slice(0, Math.max(0, max - highs.length)))
-  return picked.map((el) => {
+  return picked.map((el) => describeInteractive(el, options))
+}
+
+function describeInteractive(el, options = {}) {
     const uid = uidFor(el)
     const r = getTopViewportRect(el)
-    return {
+    const locator = publicLocator(locatorMemory.get(uid), { compact: !!options.compact })
+    const item = {
       uid,
       tag: el.tagName.toLowerCase(),
-      role: el.getAttribute("role") || null,
+      role: el.getAttribute("role") || inferRole(el) || null,
       text: labelOf(el),
-      selector: cssPath(el),
       bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-      frameChain: getFrameChain(el),
-      shadowPath: getShadowPath(el),
     }
-  })
+    if (locator && Object.keys(locator).length) item.locator = locator
+    if (!options.compact) {
+      item.selector = cssPath(el)
+      item.frameChain = getFrameChain(el)
+      item.shadowPath = getShadowPath(el)
+    }
+    return item
 }
 
 // 提取元素的可读 label。icon-only 按钮（飞书工具栏图标按钮常无文字、无 aria-label）之前 text 全是 null，
@@ -499,16 +522,214 @@ function labelOf(el) {
   return null
 }
 
+function locatorSignature(el) {
+  const rect = getTopViewportRect(el)
+  const parent = getContextParent(el)
+  return {
+    tag: el.tagName?.toLowerCase?.() || "",
+    role: el.getAttribute?.("role") || inferRole(el),
+    label: compactText(labelOf(el) || ""),
+    text: compactText(el.innerText || el.textContent || ""),
+    id: el.id || null,
+    name: el.getAttribute?.("name") || null,
+    type: el.getAttribute?.("type") || null,
+    placeholder: el.getAttribute?.("placeholder") || null,
+    ariaLabel: el.getAttribute?.("aria-label") || null,
+    href: el.getAttribute?.("href") || null,
+    selector: cssPath(el),
+    parentTag: parent?.tagName?.toLowerCase?.() || null,
+    parentLabel: compactText(parent ? labelOf(parent) || "" : ""),
+    bbox: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+  }
+}
+
+function publicLocator(signature, options = {}) {
+  if (!signature) return null
+  const { tag, role, label, text, id, name, type, placeholder, ariaLabel, href, selector } = signature
+  const locator = options.compact
+    ? { id, name, type, placeholder, ariaLabel, href }
+    : { tag, role, label, text, id, name, type, placeholder, ariaLabel, href }
+  if (!options.compact) locator.selector = selector
+  return Object.fromEntries(Object.entries(locator).filter(([, value]) => value !== null && value !== ""))
+}
+
+function rememberLocator(uid, el) {
+  locatorMemory.delete(uid)
+  locatorMemory.set(uid, locatorSignature(el))
+  while (locatorMemory.size > LOCATOR_MEMORY_MAX) locatorMemory.delete(locatorMemory.keys().next().value)
+}
+
+function locatorScore(signature, el) {
+  if (!signature || !el || el.tagName?.toLowerCase?.() !== signature.tag) return -Infinity
+  const current = locatorSignature(el)
+  let score = 2
+  if (signature.id && current.id === signature.id) score += 14
+  if (signature.ariaLabel && current.ariaLabel === signature.ariaLabel) score += 10
+  if (signature.name && current.name === signature.name) score += 7
+  if (signature.href && current.href === signature.href) score += 7
+  if (signature.label && current.label === signature.label) score += 8
+  else if (signature.label && current.label?.includes(signature.label)) score += 4
+  if (signature.text && current.text === signature.text) score += 7
+  else if (signature.text && current.text?.includes(signature.text)) score += 3
+  if (signature.role && current.role === signature.role) score += 3
+  if (signature.type && current.type === signature.type) score += 3
+  if (signature.placeholder && current.placeholder === signature.placeholder) score += 4
+  if (signature.selector && current.selector === signature.selector) score += 6
+  if (signature.parentTag && current.parentTag === signature.parentTag) score += 1
+  if (signature.parentLabel && current.parentLabel === signature.parentLabel) score += 3
+  const distance = Math.hypot((signature.bbox?.x || 0) - (current.bbox?.x || 0), (signature.bbox?.y || 0) - (current.bbox?.y || 0))
+  if (distance < 12) score += 4
+  else if (distance < 80) score += 2
+  return score
+}
+
 function findByUid(uid) {
   const u = String(uid)
   const hits = queryAllDeep(`[data-omeety-uid="${CSS.escape(u)}"]`)
   let el = hits[0] || null
   if (!el && u === "pick") el = queryAllDeep('[data-omeety-pick="1"]')[0] || null
   if (!el && /^pick-\d+$/.test(u)) el = queryAllDeep(`[data-omeety-pick-id="${CSS.escape(u)}"]`)[0] || null
+  if (!el && /^u\d+$/.test(u) && locatorMemory.has(u)) {
+    locatorRecovery.attempts += 1
+    const signature = locatorMemory.get(u)
+    const candidates = queryAllDeep(signature.tag).filter((candidate) => candidate.isConnected)
+    const ranked = candidates
+      .map((candidate) => ({ candidate, score: locatorScore(signature, candidate) }))
+      .filter((item) => Number.isFinite(item.score))
+      .sort((a, b) => b.score - a.score)
+    const best = ranked[0]
+    const second = ranked[1]
+    if (best?.score >= 10 && (!second || best.score - second.score >= 2)) {
+      el = best.candidate
+      uidMap.set(el, u)
+      el.setAttribute("data-omeety-uid", u)
+      rememberLocator(u, el)
+      locatorRecovery.recovered += 1
+      locatorRecovery.last = { uid: u, score: best.score, candidates: ranked.length, at: new Date().toISOString() }
+    } else if (best) {
+      locatorRecovery.ambiguous += 1
+      locatorRecovery.last = { uid: u, score: best.score, secondScore: second?.score, candidates: ranked.length, ambiguous: true, at: new Date().toISOString() }
+    } else {
+      locatorRecovery.failed += 1
+    }
+  }
   if (!el) {
     throw new Error(`uid "${uid}" 不存在或已失效（页面可能重渲染过；重新 get_page_snapshot 或重新点 📌 选取）`)
   }
+  if (/^u\d+$/.test(u)) rememberLocator(u, el)
   return el
+}
+
+function likelyClickable(el, allowHeuristic = true) {
+  if (!el || el === document.body || el === document.documentElement) return false
+  if (el.matches?.(INTERACTIVE_SELECTOR)) return true
+  const role = String(el.getAttribute?.("role") || "").toLowerCase()
+  if (["button", "link", "menuitem", "option", "tab", "listitem", "treeitem", "row", "cell"].includes(role)) return true
+  if (!allowHeuristic) return false
+  if (getComputedStyle(el).cursor === "pointer") return true
+  return /(?:^|[_-])(button|btn|card|contact|department|folder|item|menu|option|row|tab)(?:$|[_-])/i.test(String(el.className || ""))
+}
+
+function clickableAncestor(el, maxDepth = 6) {
+  let current = el
+  for (let depth = 0; current && depth <= maxDepth; depth += 1) {
+    if (isVisible(current) && likelyClickable(current, depth > 0)) return current
+    const root = current.getRootNode?.()
+    current = current.parentElement || (root instanceof ShadowRoot ? root.host : null)
+  }
+  return el
+}
+
+function matchingTextElements(text, exact = false, max = 300) {
+  const matches = []
+  const needle = String(text || "").toLowerCase()
+  let scanned = 0
+  const maxScanned = 7500
+  const walk = (root) => {
+    if (!root || matches.length >= max || scanned >= maxScanned) return
+    let walker
+    try {
+      walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+    } catch {
+      return
+    }
+    while (walker.nextNode() && matches.length < max && scanned < maxScanned) {
+      const el = walker.currentNode
+      scanned += 1
+      let direct = ""
+      for (const node of el.childNodes) if (node.nodeType === Node.TEXT_NODE) direct += node.textContent
+      direct = (compactText(direct) || "").toLowerCase()
+      if (direct && (exact ? direct === needle : direct.includes(needle)) && isVisible(el)) matches.push({ el, direct })
+    }
+    try {
+      for (const el of root.querySelectorAll("*")) if (el.shadowRoot) walk(el.shadowRoot)
+    } catch {
+      /* ignore */
+    }
+    try {
+      for (const frame of root.querySelectorAll("iframe,frame")) {
+        if (frame.contentDocument?.body) walk(frame.contentDocument.body)
+      }
+    } catch {
+      /* cross-origin */
+    }
+  }
+  walk(document.body)
+  return matches
+}
+
+function browserQuery(args = {}) {
+  const started = performance.now()
+  const query = String(args.query || "").trim().toLowerCase()
+  const role = String(args.role || "").trim().toLowerCase()
+  const selector = String(args.selector || "").trim()
+  const limit = clamp(Number(args.limit ?? 20), 1, 100)
+  let items
+  if (selector) {
+    items = queryAllDeep(selector).slice(0, 500).map((el) => {
+      const uid = uidFor(el)
+      const rect = getTopViewportRect(el)
+      return {
+        uid,
+        tag: el.tagName.toLowerCase(),
+        role: el.getAttribute("role") || inferRole(el),
+        text: labelOf(el),
+        selector: cssPath(el),
+        visible: isVisible(el),
+        bbox: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
+        locator: publicLocator(locatorMemory.get(uid)),
+      }
+    })
+  } else {
+    items = listInteractive(500, { compact: true }).map((item) => ({ ...item, visible: true }))
+    if (query) {
+      const seen = new Set(items.map((item) => item.uid))
+      for (const match of matchingTextElements(query, false, 300)) {
+        const target = clickableAncestor(match.el)
+        const item = describeInteractive(target, { compact: true })
+        if (seen.has(item.uid)) continue
+        seen.add(item.uid)
+        items.push({ ...item, visible: true, matchedText: match.direct, promotedFrom: target === match.el ? null : match.el.tagName.toLowerCase() })
+      }
+    }
+  }
+  const ranked = items
+    .map((item) => {
+      const haystack = [item.matchedText, item.text, item.role, item.tag, item.locator?.ariaLabel, item.locator?.placeholder, item.locator?.name].filter(Boolean).join(" ").toLowerCase()
+      let score = 0
+      if (query) {
+        if (haystack === query) score += 100
+        else if (haystack.includes(query)) score += 50
+        for (const token of query.split(/\s+/).filter(Boolean)) if (haystack.includes(token)) score += 5
+      }
+      if (role && String(item.role || "").toLowerCase() === role) score += 30
+      if (!query && !role && selector) score += 1
+      return { ...item, score }
+    })
+    .filter((item) => (!args.visibleOnly || item.visible) && (!query && !role ? true : item.score > 0))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+  return { query, role: role || null, selector: selector || null, count: ranked.length, matches: ranked, locatorRecovery: { ...locatorRecovery, remembered: locatorMemory.size }, metrics: { queryMs: Math.round((performance.now() - started) * 10) / 10, candidatesScanned: items.length } }
 }
 
 function getSelectedContext() {
@@ -555,7 +776,7 @@ function getContextBundle(args = {}) {
     target: targetDescription,
     page: {
       overview: getPageOverview(),
-      visibleTextAroundTarget: target ? collectAllText(getContextParent(target) || target).replace(/\s+/g, " ").trim().slice(0, 3000) : collectVisibleText(3000),
+      visibleTextAroundTarget: target ? collectAllText(getContextParent(target) || target, 3000).replace(/\s+/g, " ").trim() : collectVisibleText(3000),
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -820,36 +1041,7 @@ function clickByText(args) {
   const text = String(args.text ?? "")
   if (!text.trim()) throw new Error("click_text 需要 text")
   const mode = args.exact ? "exact" : "contains"
-  const matches = []
-  const walk = (root) => {
-    if (!root) return
-    let walker
-    try {
-      walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-        acceptNode(el) {
-          return isVisible(el) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-        },
-      })
-    } catch {
-      return
-    }
-    while (walker.nextNode()) {
-      const el = walker.currentNode
-      // "直接文本"：只拼元素自身的直接文本子节点，不含后代——避免父容器匹配到整段子树文本。
-      let direct = ""
-      for (const n of el.childNodes) if (n.nodeType === Node.TEXT_NODE) direct += n.textContent
-      direct = direct.replace(/\s+/g, " ").trim()
-      if (!direct) continue
-      const hit = mode === "exact" ? direct === text : direct.includes(text)
-      if (hit) matches.push(el)
-    }
-    try {
-      for (const el of root.querySelectorAll("*")) if (el.shadowRoot) walk(el.shadowRoot)
-    } catch {
-      /* ignore */
-    }
-  }
-  walk(document.body)
+  const matches = matchingTextElements(text, !!args.exact, 500).map((match) => match.el)
   if (!matches.length) {
     throw new Error(
       `click_text: 没找到文本${mode === "exact" ? "等于" : "包含"}"${text}"的可见元素（改用 contains 模式、或 omeety_get_page_snapshot 确认文本/用 📌 选取）`
@@ -865,7 +1057,8 @@ function clickByText(args) {
   matches.sort(
     (a, b) => rank(a) - rank(b) || Math.round(a.getBoundingClientRect().height) - Math.round(b.getBoundingClientRect().height)
   )
-  const target = matches[0]
+  const leaf = matches[0]
+  const target = clickableAncestor(leaf)
   const label = target.innerText || target.getAttribute("aria-label") || text
   if (!args.confirmed && DANGEROUS_RE.test(label)) {
     const approved = window.confirm(
@@ -876,7 +1069,7 @@ function clickByText(args) {
   target.scrollIntoView({ block: "center", inline: "center" })
   const description = describeElement(target)
   setTimeout(() => target.click(), 0)
-  return { clicked: true, text, matchedBy: mode, matchCount: matches.length, element: description }
+  return { clicked: true, text, matchedBy: mode, matchCount: matches.length, promotedToClickableAncestor: target !== leaf, element: description }
 }
 
 function clickAt(args) {
@@ -932,13 +1125,16 @@ function pressKey(args) {
   const element = resolveTargetElement(args) || document.activeElement || document.body
   focusElement(element)
   const beforeValue = getEditableText(element)
-  dispatchKeyboardEvent(element, "keydown", key)
+  const modifiers = new Set(Array.isArray(args.modifiers) ? args.modifiers : [])
+  const init = { metaKey: modifiers.has("Meta"), ctrlKey: modifiers.has("Control"), altKey: modifiers.has("Alt"), shiftKey: modifiers.has("Shift") }
+  dispatchKeyboardEvent(element, "keydown", key, init)
   applySimpleKeyEdit(element, key)
-  dispatchKeyboardEvent(element, "keyup", key)
+  dispatchKeyboardEvent(element, "keyup", key, init)
   const afterValue = getEditableText(element)
   return {
     pressed: true,
     key,
+    modifiers: [...modifiers],
     element: describeElement(element),
     valueChanged: beforeValue !== afterValue,
   }
@@ -984,21 +1180,41 @@ function requestUserConfirmation(args) {
 
 // 收集 root 及其所有 shadow root 内的文本（textContent）。document.body.innerText 不穿透 shadow root，
 // 飞书等大量内容在 shadow 里 → wait_for(text) 用本函数才能匹配到。
-function collectAllText(root = document.body) {
-  let out = root?.textContent || ""
+function collectAllText(root = document.body, maxLength = 100000) {
+  let out = String(root?.textContent || "").slice(0, maxLength)
+  if (out.length >= maxLength) return out
   try {
     for (const el of root?.querySelectorAll ? root.querySelectorAll("*") : []) {
-      if (el.shadowRoot) out += "\n" + collectAllText(el.shadowRoot)
+      if (el.shadowRoot) out += "\n" + collectAllText(el.shadowRoot, maxLength - out.length)
+      if (out.length >= maxLength) return out.slice(0, maxLength)
     }
   } catch { /* ignore */ }
   try {
     for (const frame of root?.querySelectorAll ? root.querySelectorAll("iframe,frame") : []) {
       try {
-        if (frame.contentDocument?.body) out += "\n" + collectAllText(frame.contentDocument.body)
+        if (frame.contentDocument?.body) out += "\n" + collectAllText(frame.contentDocument.body, maxLength - out.length)
+        if (out.length >= maxLength) return out.slice(0, maxLength)
       } catch { /* cross-origin */ }
     }
   } catch { /* ignore */ }
   return out
+}
+
+function containsTextDeep(root, needle, visited = new Set()) {
+  if (!root || visited.has(root)) return false
+  visited.add(root)
+  if (String(root.textContent || "").includes(needle)) return true
+  try {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot && containsTextDeep(el.shadowRoot, needle, visited)) return true
+    }
+    for (const frame of root.querySelectorAll("iframe,frame")) {
+      try {
+        if (frame.contentDocument?.body && containsTextDeep(frame.contentDocument.body, needle, visited)) return true
+      } catch { /* cross-origin */ }
+    }
+  } catch { /* ignore */ }
+  return false
 }
 // 轮询等待页面状态就绪（选择器出现 / 文本出现）。agent 在 navigate/click 之后用它代替瞎等固定秒数。
 // 200ms 间隔：比 MutationObserver 省一次回流风暴的复杂度，对 agent 场景足够快。
@@ -1033,14 +1249,11 @@ async function waitFor(args) {
       conditions.push({ kind: "selector", matched: !!element, element })
     }
     if (selectorGone) conditions.push({ kind: "selectorGone", matched: !findVisible(selectorGone), element: null })
-    let bodyText = null
     if (text) {
-      bodyText = collectAllText(document.body)
-      conditions.push({ kind: "text", matched: bodyText.includes(text), element: null })
+      conditions.push({ kind: "text", matched: containsTextDeep(document.body, text), element: null })
     }
     if (textGone) {
-      bodyText = bodyText ?? collectAllText(document.body)
-      conditions.push({ kind: "textGone", matched: !bodyText.includes(textGone), element: null })
+      conditions.push({ kind: "textGone", matched: !containsTextDeep(document.body, textGone), element: null })
     }
     if (urlIncludes) conditions.push({ kind: "urlIncludes", matched: location.href.includes(urlIncludes), element: null })
     if (titleIncludes) conditions.push({ kind: "titleIncludes", matched: document.title.includes(titleIncludes), element: null })
@@ -1216,7 +1429,7 @@ function getEditableText(element) {
   return ""
 }
 
-function dispatchKeyboardEvent(element, type, key) {
+function dispatchKeyboardEvent(element, type, key, init = {}) {
   element.dispatchEvent(
     new KeyboardEvent(type, {
       key,
@@ -1224,6 +1437,7 @@ function dispatchKeyboardEvent(element, type, key) {
       bubbles: true,
       cancelable: true,
       composed: true,
+      ...init,
     })
   )
 }
@@ -1303,8 +1517,9 @@ function collectVisibleText(maxTextLength) {
     try {
       for (const element of treeRoot.querySelectorAll("*")) {
         if (element.shadowRoot) collect(element.shadowRoot, depth + 1)
+        if (out.length >= maxTextLength) break
       }
-      for (const frame of treeRoot.querySelectorAll("iframe,frame")) {
+      for (const frame of out.length >= maxTextLength ? [] : treeRoot.querySelectorAll("iframe,frame")) {
         try {
           if (frame.contentDocument) collect(frame.contentDocument, depth + 1)
         } catch { /* cross-origin */ }

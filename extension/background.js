@@ -2,10 +2,11 @@
 // 职责：① 持有 native messaging 端口；② 把 native 的 tool_call 路由到活动标签页 content.js（截图在本 SW）；
 //       ③ 在面板与 native 间转发 input/output/resize/status。
 
-import { buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
+import { aggregateTransactionCompletion, buildPageEvaluationExpression, isTransientContentErrorMessage } from "./tool-runtime.js"
 import { loadSettings } from "./storage.js"
 import { OutputReplayBuffer } from "./output-replay-buffer.js"
-import { getPrintableKeyDescriptor, getPrimaryModifier, normalizeCdpInputMode } from "./cdp-input.js"
+import { getModifierMask, getPrintableKeyDescriptor, getPrimaryModifier, normalizeCdpInputMode } from "./cdp-input.js"
+import { BrowserAdapter } from "./browser-adapter.js"
 
 const NM_NAME = "com.omeety.terminal"
 
@@ -16,6 +17,16 @@ let lastPick = null // 最近一个选取（侧栏 pick_result 广播用；连�
 let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
 const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
+let browserCancelGeneration = 0
+const tabDocumentEpochs = new Map()
+
+function browserCancelEpoch() {
+  return browserCancelGeneration
+}
+
+function browserTaskCancelled(_tabId, expectedEpoch) {
+  return expectedEpoch !== undefined && browserCancelEpoch() !== expectedEpoch
+}
 
 function recordToolMetric(name, ok, durationMs) {
   const current = toolMetrics.get(name) || { calls: 0, successes: 0, failures: 0, totalMs: 0, maxMs: 0, lastMs: 0, lastAt: null }
@@ -51,6 +62,7 @@ function getRuntimeMetrics() {
     replayBufferBytes: outputBuf.totalLength,
     replayBufferChunks: outputBuf.entryCount,
     cdpAttachedTabs: cdpAttachedTabs.size,
+    browserAdapter: typeof browserAdapter === "undefined" ? null : browserAdapter.status(),
     totals: {
       calls: tools.reduce((sum, item) => sum + item.calls, 0),
       successes: tools.reduce((sum, item) => sum + item.successes, 0),
@@ -131,6 +143,17 @@ function connectNative() {
     console.warn("[omeety] native disconnect:", err || "(无 lastError，host 可能自行退出)")
     if (panelPorts.size) setTimeout(connectNative, 1500) // 面板还在 → 自动重连（=新 shell）
   })
+  void loadSettings().then(async (settings) => {
+    sendNative({ type: "browser_policy", policy: { mode: settings.browserPermissionMode || "submit" } })
+    emitBrowserEvent({ type: "adapter.ready", version: 2, at: Date.now() })
+    const tabs = await chrome.tabs.query({}).catch(() => [])
+    for (const tab of tabs) {
+      emitBrowserEvent({ type: "tab.updated", tabId: tab.id, windowId: tab.windowId, status: tab.status, url: tab.url, title: tab.title, at: Date.now() })
+      if (tab.active) emitBrowserEvent({ type: "tab.activated", tabId: tab.id, windowId: tab.windowId, focused: false, at: Date.now() })
+    }
+    const [focusedTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [])
+    if (focusedTab?.id) emitBrowserEvent({ type: "window.focused", tabId: focusedTab.id, windowId: focusedTab.windowId, at: Date.now() })
+  })
 }
 
 function sendNative(msg) {
@@ -139,6 +162,11 @@ function sendNative(msg) {
   } catch {
     /* port closed */
   }
+}
+
+function emitBrowserEvent(event) {
+  sendNative({ type: "browser_event", event })
+  broadcast({ type: "browser_event", event })
 }
 
 async function notifyPanelState(open) {
@@ -189,6 +217,13 @@ chrome.runtime.onConnect.addListener((port) => {
       sendNative(m)
     } else if (m?.type === "settings_changed") {
       void notifyPanelState(panelPorts.size > 0)
+      void loadSettings().then((settings) => sendNative({ type: "browser_policy", policy: { mode: settings.browserPermissionMode || "submit" } }))
+    } else if (m?.type === "browser_status_request") {
+      sendNative({ type: "browser_status_request", includeEvents: !!m.includeEvents })
+    } else if (m?.type === "cancel_browser") {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      browserCancelGeneration += 1
+      broadcast({ type: "browser_cancelled", tabId: tab?.id || null })
     } else if (m?.type === "replay_request") {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，
       // 否则会把别的 tab 的终端输出灌进当前 tab（跨 tab 串话）。
@@ -283,6 +318,14 @@ function chromeDebuggerSendCommand(target, method, params) {
     })
   })
 }
+const browserAdapter = new BrowserAdapter({ sendCommand: chromeDebuggerSendCommand, emit: emitBrowserEvent })
+globalThis.__omeetyBrowserAdapterObserve = async (tabId, options = {}) => {
+  await ensureCdpAttached(Number(tabId))
+  return await browserAdapter.deepObserve(Number(tabId), options)
+}
+globalThis.__omeetyCaptureTab = async (tabId, options = {}) => captureDownscaled(Number(tabId), options)
+globalThis.__omeetyActAndVerify = async (tabId, options = {}) => actAndVerify(Number(tabId), options)
+
 async function ensureCdpDomains(tabId, domains = []) {
   if (!cdpEnabledDomains.has(tabId)) cdpEnabledDomains.set(tabId, new Set())
   const enabled = cdpEnabledDomains.get(tabId)
@@ -298,11 +341,13 @@ async function ensureCdpAttached(tabId, protocolVersion = "1.3") {
   }
   if (cdpAttachedTabs.has(tabId)) {
     await ensureCdpDomains(tabId, ["Page", "Runtime"])
+    await browserAdapter.configure(tabId)
     return
   }
   await chromeDebuggerAttach({ tabId }, protocolVersion)
   cdpAttachedTabs.add(tabId)
   await ensureCdpDomains(tabId, ["Page", "Runtime"])
+  await browserAdapter.configure(tabId)
 }
 
 // 真实鼠标点击：mousePressed + mouseReleased → 建立真实焦点/光标。
@@ -327,10 +372,10 @@ function slimEditorState(state) {
   return { editable: true, tag: state.tag, rich: !!state.rich, value: state.value, length: state.length }
 }
 
-async function cdpDispatchNamedKey(tabId, key) {
+async function cdpDispatchNamedKey(tabId, key, modifiers = []) {
   const code = key
   const vkMap = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 46 }
-  const ev = { key, code, windowsVirtualKeyCode: vkMap[key] || 0 }
+  const ev = { key, code, windowsVirtualKeyCode: vkMap[key] || 0, modifiers: getModifierMask(modifiers) }
   await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...ev })
   await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...ev })
 }
@@ -478,13 +523,20 @@ async function cdpTypeText(tabId, text, clear = true, inputMode = "insertText") 
 
 // CDP 真实按键（rawKeyDown + keyUp），用于触发富文本编辑器的快捷键/提交
 // （如飞书聊天框 Enter 发送 —— 合成 keydown 它不认）。
-async function cdpKeyPress(tabId, key) {
+async function cdpKeyPress(tabId, key, modifiers = []) {
   await ensureCdpAttached(tabId)
-  if ([...key].length === 1) {
+  if ([...key].length === 1 && !modifiers.length) {
     await cdpTypePrintableKey(tabId, key)
     return
   }
-  await cdpDispatchNamedKey(tabId, key)
+  if ([...key].length === 1) {
+    const descriptor = getPrintableKeyDescriptor(key) || { key, code: "Unidentified", windowsVirtualKeyCode: 0, modifiers: 0 }
+    const ev = { ...descriptor, modifiers: descriptor.modifiers | getModifierMask(modifiers) }
+    await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...ev })
+    await chromeDebuggerSendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...ev })
+    return
+  }
+  await cdpDispatchNamedKey(tabId, key, modifiers)
 }
 
 // ---- CDP 工具的 安全门 / 自动聚焦 / 串行化 / 资源清理 基建 ----
@@ -599,8 +651,9 @@ async function execCdpTool(tabId, name, args) {
     if (!ckey) throw new Error("press_key 需要 key")
     const pt = args.refocus === false ? null : await cdpResolvePoint(tabId, args)
     if (pt) await cdpMouseClick(tabId, pt.x, pt.y, 1)
-    await cdpKeyPress(tabId, ckey)
-    return { ok: true, result: { pressed: true, key: ckey, refocused: !!pt, method: "cdp:Input.dispatchKeyEvent", tabId } }
+    const modifiers = Array.isArray(args.modifiers) ? args.modifiers : []
+    await cdpKeyPress(tabId, ckey, modifiers)
+    return { ok: true, result: { pressed: true, key: ckey, modifiers, refocused: !!pt, method: "cdp:Input.dispatchKeyEvent", tabId } }
   }
   throw new Error("未知 CDP 工具：" + name)
 }
@@ -614,23 +667,44 @@ async function cdpDetachTab(tabId) {
 }
 // tab 关闭 / 用户在 chrome://extensions 手动取消调试 → 清理，避免泄漏和 "Another debugger" 状态错配。
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabDocumentEpochs.delete(tabId)
   consoleLogs.delete(tabId)
   const fc = pendingFileChoosers.get(tabId)
   if (fc) { clearTimeout(fc.timer); pendingFileChoosers.delete(tabId) }
   if (lastPick?.tabId === tabId) lastPick = null // 该 tab 关了，它的 pick 失效，避免串到别的 tab
   if (lastPickSet?.tabId === tabId) lastPickSet = null
   if (cdpAttachedTabs.has(tabId)) void cdpDetachTab(tabId)
+  emitBrowserEvent({ type: "tab.removed", tabId, at: Date.now() })
+})
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "loading" || changeInfo.url) tabDocumentEpochs.set(tabId, (tabDocumentEpochs.get(tabId) || 0) + 1)
+  if (!changeInfo.status && !changeInfo.url && !changeInfo.title) return
+  emitBrowserEvent({ type: "tab.updated", tabId, windowId: tab.windowId, status: changeInfo.status || tab.status, url: changeInfo.url || tab.url, title: changeInfo.title || tab.title, at: Date.now() })
 })
 // 切换活动标签页 → 通知面板（选取态切 tab 时提示：选取按页面独立，本页需重选）
 chrome.tabs.onActivated.addListener((activeInfo) => {
+  chrome.windows.get(activeInfo.windowId)
+    .then((win) => emitBrowserEvent({ type: "tab.activated", tabId: activeInfo.tabId, windowId: activeInfo.windowId, focused: !!win.focused, at: Date.now() }))
+    .catch(() => emitBrowserEvent({ type: "tab.activated", tabId: activeInfo.tabId, windowId: activeInfo.windowId, focused: false, at: Date.now() }))
   chrome.tabs.get(activeInfo.tabId)
     .then((t) => broadcast({ type: "active_tab_changed", tabId: activeInfo.tabId, title: t?.title || "" }))
     .catch(() => broadcast({ type: "active_tab_changed", tabId: activeInfo.tabId, title: "" }))
 })
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return
+  chrome.tabs.query({ active: true, windowId })
+    .then(([tab]) => {
+      if (tab?.id) emitBrowserEvent({ type: "window.focused", tabId: tab.id, windowId, at: Date.now() })
+    })
+    .catch(() => {})
+})
 if (chrome.debugger?.onDetach) {
-  chrome.debugger.onDetach.addListener((source) => {
+chrome.debugger.onDetach.addListener((source) => {
     const tid = source?.tabId
-    if (tid != null) { cdpAttachedTabs.delete(tid); cdpEnabledDomains.delete(tid); cdpQueues.delete(tid) }
+    if (tid != null) {
+      cdpAttachedTabs.delete(tid); cdpEnabledDomains.delete(tid); cdpQueues.delete(tid)
+      browserAdapter.onDetach(tid, "chrome.debugger.onDetach")
+    }
   })
 }
 
@@ -644,6 +718,7 @@ async function resolveToolTab(args = {}) {
 }
 
 const TAB_CONTEXT_RESULT_TOOLS = new Set([
+  "omeety_browser_observe", "omeety_browser_query",
   "omeety_get_page_snapshot", "omeety_get_selected_context", "omeety_get_context_bundle", "omeety_fetch_with_cookie",
   "omeety_apply_preview_patch", "omeety_rollback_preview_patch", "omeety_click", "omeety_act_and_verify",
   "omeety_click_text", "omeety_click_at", "omeety_fill", "omeety_type_text", "omeety_press_key", "omeety_select",
@@ -660,24 +735,31 @@ async function handleToolCall({ id, name, args }) {
     // 工具可显式锁定 tabId。Agent 执行长事务时，即使用户切到其他页面，
     // 后续步骤仍作用于原标签页，不再误等待/误点新的活动页。
     tab = await resolveToolTab(args)
+    const cancelEpoch = browserCancelEpoch()
     let r
     if (name === "omeety_request_user_confirmation") {
       // 优先让 Omeety 自己的侧栏承载确认：下载管理器属于 host 本地工具，不应依赖当前网页
       // 是否允许 content script 注入。侧栏关闭时回退到原网页 confirm，保持旧客户端兼容。
       const approved = await (requestPanelConfirmation(args) ?? sendToContent(tab?.id, name, args).then((value) => Boolean(value?.result?.approved)))
       r = { ok: true, result: { approved } }
+    } else if (name === "omeety_browser_observe") {
+      if (!tab?.id) throw new Error("没有活动标签页")
+      r = await browserObserve(tab.id, args)
+    } else if (name === "omeety_browser_query") {
+      if (!tab?.id) throw new Error("没有活动标签页")
+      r = await sendToContent(tab.id, name, args)
     } else if (name === "omeety_get_context_bundle") {
       if (!tab?.id) throw new Error("没有活动标签页")
       r = await buildContextBundle(tab.id, args)
     } else if (name === "omeety_act_and_verify") {
       if (!tab?.id) throw new Error("没有活动标签页")
       r = Array.isArray(args?.steps)
-        ? await runSerial(tab.id, () => runActionTransaction(tab.id, args))
-        : await actAndVerify(tab.id, args)
+        ? await runSerial(tab.id, () => runActionTransaction(tab.id, { ...args, __cancelEpoch: cancelEpoch }))
+        : await actAndVerify(tab.id, { ...args, __cancelEpoch: cancelEpoch })
     } else if (name === "omeety_get_runtime_metrics") {
       r = { ok: true, result: getRuntimeMetrics() }
     } else if (name === "omeety_capture_visible_tab") {
-      r = await captureDownscaled(tab?.id)
+      r = await captureDownscaled(tab?.id, args || {})
     } else if (name === "omeety_get_user_picks") {
       const curTabId = tab?.id ?? null
       if (lastPickSet && lastPickSet.tabId != null && lastPickSet.tabId !== curTabId) {
@@ -749,7 +831,7 @@ async function handleToolCall({ id, name, args }) {
     } else if (name === "omeety_wait_for") {
       // wait_for 在 background 逐次探测。页面发生 reload/navigation 时旧 content script
       // 可以安全销毁；新文档注入完成后继续等，不再把 message channel closed 当作工具失败。
-      r = await waitForAcrossNavigation(tab?.id, args)
+      r = await waitForAcrossNavigation(tab?.id, { ...args, __cancelEpoch: cancelEpoch })
     } else if (name === "omeety_click" && (args?.waitForSelector || args?.waitForText)) {
       // 点击与等待拆成两个阶段。等待若跨文档，仍由上面的导航恢复轮询接管。
       const clickArgs = { ...args }
@@ -855,6 +937,7 @@ function pushConsoleLog(tabId, entry) {
 
 if (chrome.debugger?.onEvent) {
   chrome.debugger.onEvent.addListener((source, method, params) => {
+    void browserAdapter.onEvent(source, method, params)
     const tabId = source?.tabId
     if (tabId == null) return
     if (method === "Runtime.consoleAPICalled") {
@@ -893,6 +976,34 @@ async function getConsoleLogs(tabId, args = {}) {
       note: firstAttach ? "刚 attach 调试器：只能收到此刻之后的日志，复现操作后再调一次本工具" : undefined,
     },
   }
+}
+
+async function browserObserve(tabId, args = {}) {
+  const started = performance.now()
+  const content = await sendToContent(tabId, "omeety_get_page_snapshot", {
+    mode: args.mode || "light",
+    profile: args.profile || "compact",
+    includeElements: args.includeElements,
+    maxTextLength: args.maxTextLength ?? 6000,
+    maxInteractive: args.maxInteractive ?? 120,
+    sinceSnapshotId: args.sinceSnapshotId,
+  })
+  if (!content.ok) return content
+  const result = {
+    ...content.result,
+    observationVersion: 2,
+    locatorRecovery: content.result?.locatorRecovery || null,
+    adapter: browserAdapter.status(),
+  }
+  if (args.deep) {
+    await ensureCdpAttached(tabId)
+    result.deep = await browserAdapter.deepObserve(tabId, args)
+  }
+  result.metrics = {
+    ...(result.metrics || {}),
+    browserCoreObserveMs: Math.round((performance.now() - started) * 10) / 10,
+  }
+  return { ok: true, result }
 }
 
 // pending file-chooser waiters: tabId -> {resolve, timer}（upload_file 用）
@@ -989,8 +1100,27 @@ async function buildContextBundle(tabId, args = {}) {
   return { ok: true, result: bundle }
 }
 
+const POSTCONDITION_KEYS = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
+
+function buildActionExpectation(args, action, target) {
+  const expectation = { ...(args.expect || {}) }
+  const persistAfterReload = expectation.persistAfterReload === true
+  delete expectation.persistAfterReload
+  if (action === "fill" || action === "select") expectation.valueEquals ??= String(args.value ?? "")
+  if (action === "type") {
+    if (args.clear !== false) expectation.valueEquals ??= String(args.text ?? "")
+    else expectation.valueIncludes ??= String(args.text ?? "")
+  }
+  if (target.uid) expectation.targetUid ??= target.uid
+  if (target.selector) expectation.targetSelector ??= target.selector
+  expectation.match = expectation.match === "any" ? "any" : "all"
+  expectation.timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? expectation.timeoutMs ?? 8000), 500), 60000)
+  return { expectation, persistAfterReload, hasExpectation: POSTCONDITION_KEYS.some((key) => expectation[key] !== undefined) }
+}
+
 async function actAndVerify(tabId, args = {}) {
   const started = performance.now()
+  if (browserTaskCancelled(tabId, args.__cancelEpoch)) return { ok: false, error: "浏览器任务已由用户停止" }
   const action = String(args.action || "")
   const target = {
     ...(args.uid ? { uid: String(args.uid) } : {}),
@@ -999,9 +1129,17 @@ async function actAndVerify(tabId, args = {}) {
     ...(Number.isFinite(Number(args.y)) ? { y: Number(args.y) } : {}),
   }
   const verificationEnabled = args.verify !== false
+  const { expectation, persistAfterReload, hasExpectation } = buildActionExpectation(args, action, target)
+  if (!verificationEnabled && persistAfterReload) {
+    return { ok: false, error: "persistAfterReload:true 需要启用 verify" }
+  }
   const before = verificationEnabled
     ? await sendToContent(tabId, "omeety_get_verification_state", target)
     : { ok: true, result: null }
+  const needsCausalCheck = ["click", "click_text", "press"].includes(action)
+  const precondition = verificationEnabled && hasExpectation && needsCausalCheck
+    ? await sendToContent(tabId, "omeety_wait_for", { ...expectation, probeOnly: true })
+    : null
   const actionArgs = {
     ...target,
     ...(args.confirmed ? { confirmed: true } : {}),
@@ -1011,6 +1149,7 @@ async function actAndVerify(tabId, args = {}) {
     ...(args.inputMode ? { inputMode: String(args.inputMode) } : {}),
     ...(args.commitKey ? { commitKey: String(args.commitKey) } : {}),
     ...(args.clickCount ? { clickCount: Number(args.clickCount) } : {}),
+    ...(Array.isArray(args.modifiers) ? { modifiers: args.modifiers } : {}),
   }
   let toolName
   if (action === "click") {
@@ -1037,12 +1176,21 @@ async function actAndVerify(tabId, args = {}) {
   }
 
   let acted
+  let recovery = null
   if (isCdpTool(toolName, actionArgs)) {
     acted = args.__transactionSerialized
       ? await execCdpTool(tabId, toolName, actionArgs)
       : await runSerial(tabId, () => execCdpTool(tabId, toolName, actionArgs))
   }
   else acted = await sendToContent(tabId, toolName, actionArgs)
+  if (!acted.ok && args.retryRecoverable !== false && /uid .*失效|不存在或已失效|element not found|message channel|receiving end/i.test(String(acted.error || ""))) {
+    const recoveryStarted = performance.now()
+    await sendToContent(tabId, "omeety_get_page_snapshot", { maxTextLength: 0, maxInteractive: 300 }).catch(() => null)
+    acted = isCdpTool(toolName, actionArgs)
+      ? (args.__transactionSerialized ? await execCdpTool(tabId, toolName, actionArgs) : await runSerial(tabId, () => execCdpTool(tabId, toolName, actionArgs)))
+      : await sendToContent(tabId, toolName, actionArgs)
+    recovery = { attempted: true, recovered: !!acted.ok, elapsedMs: Math.round((performance.now() - recoveryStarted) * 10) / 10 }
+  }
   if (!acted.ok) return acted
 
   if (!verificationEnabled) {
@@ -1051,6 +1199,8 @@ async function actAndVerify(tabId, args = {}) {
       result: {
         action: { name: toolName, result: acted.result },
         verified: null,
+        completionLevel: "dispatched",
+        committed: false,
         verificationStrength: "not-requested",
         stateChanged: null,
         expectation: null,
@@ -1058,45 +1208,52 @@ async function actAndVerify(tabId, args = {}) {
         before: null,
         after: null,
         timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+        recovery,
       },
     }
   }
 
-  const expectation = { ...(args.expect || {}) }
-  if (action === "fill" || action === "select") expectation.valueEquals ??= String(args.value ?? "")
-  if (action === "type") {
-    if (args.clear !== false) expectation.valueEquals ??= String(args.text ?? "")
-    else expectation.valueIncludes ??= String(args.text ?? "")
-  }
-  if (target.uid) expectation.targetUid ??= target.uid
-  if (target.selector) expectation.targetSelector ??= target.selector
-  expectation.match = expectation.match === "any" ? "any" : "all"
-  expectation.timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? expectation.timeoutMs ?? 8000), 500), 60000)
-  const conditionKeys = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
-  const hasExpectation = conditionKeys.some((key) => expectation[key] !== undefined)
-
   let waited = null
-  if (hasExpectation) waited = await waitForAcrossNavigation(tabId, expectation)
+  if (hasExpectation) waited = await waitForAcrossNavigation(tabId, { ...expectation, __cancelEpoch: args.__cancelEpoch })
   else await waitDelay(Math.min(Math.max(Number(args.settleMs) || 250, 50), 2000))
   const after = await sendToContent(tabId, "omeety_get_verification_state", target)
   const beforeState = before.ok ? before.result : null
   const afterState = after.ok ? after.result : null
   const comparable = (state) => state ? { url: state.url, title: state.title, textDigest: state.textDigest, target: state.target } : null
   const stateChanged = JSON.stringify(comparable(beforeState)) !== JSON.stringify(comparable(afterState))
-  const verified = hasExpectation ? Boolean(waited?.ok && waited.result?.found && !waited.result?.timeout) : stateChanged
+  const preconditionMatched = Boolean(precondition?.ok && precondition.result?.found)
+  let verified = hasExpectation ? Boolean(waited?.ok && waited.result?.found && !waited.result?.timeout) : stateChanged
+  if (verified && preconditionMatched && !stateChanged) verified = false
+  let persistence = null
+  if (verified && persistAfterReload) {
+    const beforeEpoch = tabDocumentEpochs.get(tabId) || 0
+    await chrome.tabs.reload(tabId)
+    const persisted = await waitForAcrossNavigation(tabId, {
+      ...expectation,
+      __cancelEpoch: args.__cancelEpoch,
+      __minDocumentEpoch: beforeEpoch + 1,
+    })
+    persistence = persisted?.result || { error: persisted?.error || "刷新后验证失败" }
+    verified = Boolean(persisted?.ok && persisted.result?.found && !persisted.result?.timeout)
+  }
 
   return {
     ok: true,
     result: {
       action: { name: toolName, result: acted.result },
       verified,
-      verificationStrength: hasExpectation ? "strong-explicit-postcondition" : "weak-observed-state-change",
+      completionLevel: verified && persistAfterReload ? "committed" : verified ? "applied" : "dispatched",
+      committed: Boolean(verified && persistAfterReload),
+      verificationStrength: preconditionMatched && !stateChanged ? "precondition-already-satisfied" : persistAfterReload ? "durable-post-reload-condition" : hasExpectation ? "strong-explicit-postcondition" : "weak-observed-state-change",
       stateChanged,
       expectation: hasExpectation ? expectation : null,
       waited: waited?.result || null,
+      precondition: precondition?.result || null,
+      persistence,
       before: beforeState,
       after: afterState,
       timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+      recovery,
     },
   }
 }
@@ -1113,6 +1270,11 @@ async function runActionTransaction(tabId, args = {}) {
   let firstFailure = null
 
   for (let index = 0; index < steps.length; index++) {
+    if (browserTaskCancelled(tabId, args.__cancelEpoch)) {
+      firstFailure = { index, action: "cancelled", ok: false, error: "浏览器任务已由用户停止" }
+      results.push(firstFailure)
+      break
+    }
     const stepStarted = performance.now()
     const step = steps[index] || {}
     const action = String(step.action || "")
@@ -1125,39 +1287,43 @@ async function runActionTransaction(tabId, args = {}) {
           confirmed: step.confirmed ?? args.confirmed,
           verify: shouldVerify,
           __transactionSerialized: true,
+          __cancelEpoch: args.__cancelEpoch,
+          retryRecoverable: step.retryRecoverable ?? args.retryRecoverable,
         })
         if (outcome.ok && shouldVerify && outcome.result?.verified !== true) {
           outcome = { ok: false, error: `步骤 ${index + 1} 后置条件未成立`, result: outcome.result }
         }
       } else if (action === "wait") {
-        outcome = await waitForAcrossNavigation(tabId, { ...(step.expect || {}), timeoutMs: step.timeoutMs ?? step.expect?.timeoutMs })
+        outcome = await waitForAcrossNavigation(tabId, { ...(step.expect || {}), timeoutMs: step.timeoutMs ?? step.expect?.timeoutMs, __cancelEpoch: args.__cancelEpoch })
         if (outcome.ok && (!outcome.result?.found || outcome.result?.timeout)) {
           outcome = { ok: false, error: `步骤 ${index + 1} 等待超时`, result: outcome.result }
         }
       } else if (action === "reload") {
+        const beforeEpoch = tabDocumentEpochs.get(tabId) || 0
         await chrome.tabs.reload(tabId, { bypassCache: !!step.bypassCache })
         let waited = null
         if (step.expect) {
-          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs })
+          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs, __cancelEpoch: args.__cancelEpoch, __minDocumentEpoch: beforeEpoch + 1 })
           if (!waited.ok || !waited.result?.found || waited.result?.timeout) {
             outcome = { ok: false, error: `步骤 ${index + 1} 刷新后验证失败`, result: waited.result }
           }
         } else if (step.settleMs) {
           await waitDelay(Math.min(Math.max(Number(step.settleMs), 50), 5000))
         }
-        outcome ??= { ok: true, result: { reloaded: true, tabId, waited: waited?.result || null } }
+        outcome ??= { ok: true, result: { reloaded: true, tabId, waited: waited?.result || null, completionLevel: waited ? "applied" : "dispatched", committed: false } }
       } else if (action === "navigate") {
         const url = String(step.url || "")
         if (!/^https?:\/\//i.test(url)) throw new Error(`步骤 ${index + 1} navigate 需要 http(s) url`)
+        const beforeEpoch = tabDocumentEpochs.get(tabId) || 0
         await chrome.tabs.update(tabId, { url })
         let waited = null
         if (step.expect) {
-          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs })
+          waited = await waitForAcrossNavigation(tabId, { ...step.expect, timeoutMs: step.timeoutMs ?? step.expect.timeoutMs, __cancelEpoch: args.__cancelEpoch, __minDocumentEpoch: beforeEpoch + 1 })
           if (!waited.ok || !waited.result?.found || waited.result?.timeout) {
             outcome = { ok: false, error: `步骤 ${index + 1} 导航后验证失败`, result: waited.result }
           }
         }
-        outcome ??= { ok: true, result: { navigating: true, tabId, url, waited: waited?.result || null } }
+        outcome ??= { ok: true, result: { navigating: true, tabId, url, waited: waited?.result || null, completionLevel: waited ? "applied" : "dispatched", committed: false } }
       } else if (action === "evaluate") {
         const code = String(step.code || "")
         const confirmed = step.confirmed ?? args.confirmed
@@ -1179,12 +1345,16 @@ async function runActionTransaction(tabId, args = {}) {
       result: outcome?.result,
       error: outcome?.error,
       timingMs: Math.round((performance.now() - stepStarted) * 10) / 10,
+      recovery: outcome?.result?.recovery || null,
+      completionLevel: outcome?.result?.completionLevel || (action === "wait" || action === "evaluate" ? "observed" : "dispatched"),
+      committed: outcome?.result?.committed === true,
     }
     results.push(entry)
     if (!entry.ok && !firstFailure) firstFailure = entry
     if (!entry.ok && args.stopOnError !== false) break
   }
 
+  const aggregateCompletion = aggregateTransactionCompletion(results, firstFailure)
   const result = {
     completed: !firstFailure && results.length === steps.length,
     tabId,
@@ -1194,6 +1364,8 @@ async function runActionTransaction(tabId, args = {}) {
     error: firstFailure?.error || null,
     steps: results,
     timing: { totalMs: Math.round((performance.now() - started) * 10) / 10 },
+    completionLevel: aggregateCompletion,
+    committed: aggregateCompletion === "committed",
   }
   // 事务的语义失败仍返回结构化步骤，让 Agent 看到准确的断点与已执行结果；
   // runtime metrics 会把 completed:false 记为失败，不会统计成假成功。
@@ -1270,7 +1442,12 @@ async function waitForAcrossNavigation(tabId, args = {}) {
   const started = Date.now()
   let transientError = ""
   for (;;) {
-    const probe = await sendToContent(tabId, "omeety_wait_for", { ...expectationArgs, probeOnly: true })
+    if (browserTaskCancelled(tabId, args.__cancelEpoch)) return { ok: false, error: "浏览器任务已由用户停止" }
+    const currentEpoch = tabDocumentEpochs.get(tabId) || 0
+    const documentReady = !Number.isInteger(args.__minDocumentEpoch) || currentEpoch >= args.__minDocumentEpoch
+    const probe = documentReady
+      ? await sendToContent(tabId, "omeety_wait_for", { ...expectationArgs, probeOnly: true })
+      : { ok: true, result: { found: false } }
     if (probe.ok && probe.result?.found) {
       return {
         ok: true,
@@ -1309,7 +1486,28 @@ const SCREENSHOT_MAX_WIDTH = 1280
 async function captureDownscaled(tabId, options = {}) {
   const tab = tabId ? await chrome.tabs.get(tabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
   if (!tab) return { ok: false, error: "没有活动标签页" }
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
+  const active = (await chrome.tabs.query({ active: true, windowId: tab.windowId }))[0]
+  let dataUrl
+  let originalMime
+  let transport
+  if (active?.id === tab.id) {
+    dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
+    originalMime = "image/png"
+    transport = "chrome.tabs.captureVisibleTab"
+  } else {
+    await ensureCdpAttached(tab.id)
+    await ensureCdpDomains(tab.id, ["Page"])
+    const capture = await chromeDebuggerSendCommand({ tabId: tab.id }, "Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 78,
+      fromSurface: true,
+      captureBeyondViewport: false,
+    })
+    if (!capture?.data) return { ok: false, error: "CDP 未返回后台标签页截图" }
+    dataUrl = `data:image/jpeg;base64,${capture.data}`
+    originalMime = "image/jpeg"
+    transport = "cdp:Page.captureScreenshot"
+  }
   const img = await downscale(dataUrl, Number(options.maxWidth) || SCREENSHOT_MAX_WIDTH, 0.7, options.crop)
   return {
     ok: true,
@@ -1319,7 +1517,8 @@ async function captureDownscaled(tabId, options = {}) {
       url: tab.url,
       title: tab.title,
       capturedAt: new Date().toISOString(),
-      originalMime: "image/png",
+      originalMime,
+      transport,
       downscaled: true,
       // 截图坐标空间：图为物理像素（dpr 缩放后），与 click_at / snapshot.bbox 的 CSS 像素不一致。
       // agent 从截图读坐标点击时，配 omeety_get_page_snapshot 的 viewport.devicePixelRatio 换算：
