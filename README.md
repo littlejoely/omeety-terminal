@@ -77,6 +77,18 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 > `installer\install.ps1`（Windows）或 `./installer/install.sh`（macOS）即可，
 > 无需 `npm install`，也无需联网拉依赖。
 
+维护者生成离线包时必须使用白名单打包器，不要直接压缩工作区：
+
+```powershell
+Set-Location host
+npm run package:release
+```
+
+产物位于 `dist/omeety-terminal-v<版本>-offline.zip`，同时生成归档 SHA-256；
+压缩包内的 `PACKAGE-MANIFEST.json` 记录每个文件的大小和 SHA-256。打包器只复制
+明确审查过的运行文件，并在全新临时目录中按 lockfile 安装生产依赖，因此不会带入
+浏览器 Profile、日志、本地配置、密钥或备份。
+
 ## 产品定位：Agent 的浏览器外骨骼
 
 可以把 LLM 理解为操控者，把 Codex、Claude Code、Kimi Code 等 CLI Agent

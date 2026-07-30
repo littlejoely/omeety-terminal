@@ -76,13 +76,34 @@ def main():
             assert sum(item["renderer"] == "suspended" for item in state) == 5, state
             assert sum(item["active"] for item in state) == 1, state
 
+            # A tab node must survive its own activation. Rebuilding the whole
+            # strip can drop a real pointer click when an OSC title update lands
+            # between pointerdown and click.
+            activation = page.locator(".tab").first.evaluate(
+                """el => {
+                  const started = performance.now();
+                  el.click();
+                  return {
+                    elapsed: performance.now() - started,
+                    sameNode: document.querySelector('.tab') === el,
+                  };
+                }"""
+            )
+            assert activation["sameNode"], activation
+            assert activation["elapsed"] < 25, activation
+
             for index in range(30):
                 page.locator(".tab").nth(index % 6).click()
-                page.wait_for_timeout(20)
+                page.wait_for_timeout(10)
+
+            # Renderer handoff is intentionally deferred/coalesced so rapid
+            # clicks never synchronously dispose and recreate WebGL contexts.
+            page.wait_for_timeout(100)
 
             state = renderer_state(page)
             assert sum(item["renderer"] == "webgl" for item in state) == 1, state
             assert sum(item["renderer"] == "suspended" for item in state) == 5, state
+            assert next(item for item in state if item["active"])["renderer"] == "webgl", state
             assert not errors, errors
             browser.close()
             print("PASS tab render budget: 6 tabs, 1 WebGL renderer, 30 rapid switches")
