@@ -22,6 +22,61 @@ const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
 let browserCancelGeneration = 0
 const tabDocumentEpochs = new Map()
+const uidTargetContexts = new Map() // uid -> { tabId, documentEpoch, origin, documentId }
+const UID_TARGET_CONTEXT_MAX = 5000
+
+function safeOrigin(url) {
+  try { return new URL(String(url || "")).origin } catch { return null }
+}
+
+function rememberUidTargetContexts(tabId, result) {
+  if (!result || typeof result !== "object") return
+  const origin = result.origin || result.page?.origin || safeOrigin(result.url || result.page?.url)
+  const documentId = result.documentId || result.page?.documentId
+  if (!origin || !documentId) return
+  const context = { tabId, documentEpoch: tabDocumentEpochs.get(tabId) || 0, origin, documentId }
+  const seen = new Set()
+  const visit = (value, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return
+    seen.add(value)
+    if (typeof value.uid === "string" && /^u[a-f0-9]{12}-\d+$/.test(value.uid)) {
+      uidTargetContexts.delete(value.uid)
+      uidTargetContexts.set(value.uid, context)
+      while (uidTargetContexts.size > UID_TARGET_CONTEXT_MAX) uidTargetContexts.delete(uidTargetContexts.keys().next().value)
+    }
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 600)) visit(item, depth + 1)
+      return
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (["dataUrl", "visibleText", "body", "image"].includes(key)) continue
+      visit(child, depth + 1)
+    }
+  }
+  visit(result)
+}
+
+async function validateUidTargetContext(tabId, name, args = {}) {
+  const targetBoundExpectation = ["valueEquals", "valueIncludes", "checked", "selected", "ariaCurrent", "classIncludes", "targetTextEquals", "targetTextIncludes"]
+    .some((key) => args[key] !== undefined)
+  const uid = args.uid || (targetBoundExpectation ? args.targetUid : null)
+  if (!uid || !/^u[a-f0-9]{12}-\d+$/.test(String(uid))) return null
+  const remembered = uidTargetContexts.get(String(uid))
+  if (!remembered) return null // service-worker restart: content document id still provides the final guard
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  const current = {
+    tabId,
+    documentEpoch: tabDocumentEpochs.get(tabId) || 0,
+    origin: safeOrigin(tab?.url || tab?.pendingUrl),
+  }
+  if (remembered.tabId !== current.tabId || remembered.documentEpoch !== current.documentEpoch || remembered.origin !== current.origin) {
+    return {
+      ok: false,
+      error: `uid "${uid}" 的页面上下文已失效，已在 ${name} 派发前拒绝（expected tab=${remembered.tabId}, epoch=${remembered.documentEpoch}, origin=${remembered.origin}; current tab=${current.tabId}, epoch=${current.documentEpoch}, origin=${current.origin}）；请重新 observe/query`,
+    }
+  }
+  return null
+}
 
 function browserCancelEpoch() {
   return browserCancelGeneration
@@ -584,7 +639,7 @@ function runSerial(tabId, fn) {
 async function cdpGetLabelAt(tabId, x, y) {
   await ensureCdpAttached(tabId)
   const res = await chromeDebuggerSendCommand({ tabId }, "Runtime.evaluate", {
-    expression: `(()=>{const el=document.elementFromPoint(${x},${y});if(!el)return'';return(el.innerText||el.value||el.getAttribute('aria-label')||el.getAttribute('title')||'').slice(0,200)})()`,
+    expression: `(()=>{const el=document.elementFromPoint(${x},${y});if(!el)return'';const icon=el.matches?.('[data-icon]')?el:el.querySelector?.('[data-icon]');return(el.innerText||el.value||el.getAttribute('aria-label')||el.getAttribute('title')||icon?.getAttribute('data-icon')||icon?.querySelector?.('title')?.textContent||'').slice(0,200)})()`,
     returnByValue: true,
   })
   return String(res?.result?.value || "")
@@ -683,6 +738,7 @@ async function cdpDetachTab(tabId) {
 // tab 关闭 / 用户在 chrome://extensions 手动取消调试 → 清理，避免泄漏和 "Another debugger" 状态错配。
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabDocumentEpochs.delete(tabId)
+  for (const [uid, context] of uidTargetContexts) if (context.tabId === tabId) uidTargetContexts.delete(uid)
   consoleLogs.delete(tabId)
   const fc = pendingFileChoosers.get(tabId)
   if (fc) { clearTimeout(fc.timer); pendingFileChoosers.delete(tabId) }
@@ -873,6 +929,8 @@ async function handleToolCall({ id, name, args }) {
     // 无需为每个工作流先多调一次 list_tabs。
     if (r?.ok && tab?.id && TAB_CONTEXT_RESULT_TOOLS.has(name) && r.result && typeof r.result === "object") {
       r.result.tabId ??= tab.id
+      r.result.documentEpoch ??= tabDocumentEpochs.get(tab.id) || 0
+      r.result.origin ??= safeOrigin(tab.url || tab.pendingUrl)
     }
     recordToolMetric(name, isSemanticToolSuccess(r), Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: !!r?.ok, result: r?.result, error: r?.error })
@@ -1115,7 +1173,7 @@ async function buildContextBundle(tabId, args = {}) {
   return { ok: true, result: bundle }
 }
 
-const POSTCONDITION_KEYS = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
+const POSTCONDITION_KEYS = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked", "selected", "ariaCurrent", "classIncludes", "targetTextEquals", "targetTextIncludes"]
 
 function buildActionExpectation(args, action, target) {
   const expectation = { ...(args.expect || {}) }
@@ -1126,8 +1184,12 @@ function buildActionExpectation(args, action, target) {
     if (args.clear !== false) expectation.valueEquals ??= String(args.text ?? "")
     else expectation.valueIncludes ??= String(args.text ?? "")
   }
-  if (target.uid) expectation.targetUid ??= target.uid
-  if (target.selector) expectation.targetSelector ??= target.selector
+  // 显式 targetUid/targetSelector 可把后置条件绑定到动作目标之外的状态节点。
+  // 例如点击发送按钮后，应验证编辑器清空，而不是验证发送按钮的 value。
+  if (!expectation.targetUid && !expectation.targetSelector) {
+    if (target.uid) expectation.targetUid = target.uid
+    else if (target.selector) expectation.targetSelector = target.selector
+  }
   expectation.match = expectation.match === "any" ? "any" : "all"
   expectation.timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? expectation.timeoutMs ?? 8000), 500), 60000)
   return { expectation, persistAfterReload, hasExpectation: POSTCONDITION_KEYS.some((key) => expectation[key] !== undefined) }
@@ -1259,7 +1321,7 @@ async function actAndVerify(tabId, args = {}) {
       verified,
       completionLevel: verified && persistAfterReload ? "committed" : verified ? "applied" : "dispatched",
       committed: Boolean(verified && persistAfterReload),
-      verificationStrength: preconditionMatched && !stateChanged ? "precondition-already-satisfied" : persistAfterReload ? "durable-post-reload-condition" : hasExpectation ? "strong-explicit-postcondition" : "weak-observed-state-change",
+      verificationStrength: preconditionMatched && !stateChanged ? "precondition-already-satisfied" : preconditionMatched && stateChanged ? "target-state-transition" : persistAfterReload ? "durable-post-reload-condition" : hasExpectation ? "strong-explicit-postcondition" : "weak-observed-state-change",
       stateChanged,
       expectation: hasExpectation ? expectation : null,
       waited: waited?.result || null,
@@ -1389,10 +1451,14 @@ async function runActionTransaction(tabId, args = {}) {
 
 async function sendToContent(tabId, name, args) {
   if (!tabId) return { ok: false, error: "没有活动标签页" }
+  const rejected = await validateUidTargetContext(tabId, name, args)
+  if (rejected) return rejected
   const payload = { type: "omeety_execute_tool", tool: name, arguments: args }
   try {
     const r = await chrome.tabs.sendMessage(tabId, payload)
-    return normalizeContent(r)
+    const normalized = normalizeContent(r)
+    if (normalized.ok) rememberUidTargetContexts(tabId, normalized.result)
+    return normalized
   } catch (e) {
     if (isMissingContent(e)) {
       // 该标签页早于扩展打开、content.js 未注入 → 注入后重试一次
@@ -1408,7 +1474,9 @@ async function sendToContent(tabId, name, args) {
       }
       try {
         const r = await chrome.tabs.sendMessage(tabId, payload)
-        return normalizeContent(r)
+        const normalized = normalizeContent(r)
+        if (normalized.ok) rememberUidTargetContexts(tabId, normalized.result)
+        return normalized
       } catch (retryError) {
         return { ok: false, error: retryError?.message || String(retryError) }
       }
@@ -1447,11 +1515,16 @@ async function waitForAcrossNavigation(tabId, args = {}) {
     ...(args.valueEquals !== undefined ? { valueEquals: String(args.valueEquals) } : {}),
     ...(args.valueIncludes !== undefined ? { valueIncludes: String(args.valueIncludes) } : {}),
     ...(typeof args.checked === "boolean" ? { checked: args.checked } : {}),
+    ...(typeof args.selected === "boolean" ? { selected: args.selected } : {}),
+    ...(args.ariaCurrent !== undefined ? { ariaCurrent: String(args.ariaCurrent) } : {}),
+    ...(args.classIncludes !== undefined ? { classIncludes: String(args.classIncludes) } : {}),
+    ...(args.targetTextEquals !== undefined ? { targetTextEquals: String(args.targetTextEquals) } : {}),
+    ...(args.targetTextIncludes !== undefined ? { targetTextIncludes: String(args.targetTextIncludes) } : {}),
     ...(args.targetUid ? { targetUid: String(args.targetUid) } : {}),
     ...(args.targetSelector ? { targetSelector: String(args.targetSelector) } : {}),
     ...(args.match === "all" ? { match: "all" } : {}),
   }
-  const conditionKeys = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked"]
+  const conditionKeys = ["selector", "text", "selectorGone", "textGone", "urlIncludes", "titleIncludes", "valueEquals", "valueIncludes", "checked", "selected", "ariaCurrent", "classIncludes", "targetTextEquals", "targetTextIncludes"]
   if (!conditionKeys.some((key) => key in expectationArgs)) return { ok: false, error: "wait_for 需要至少一个验证条件" }
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10000), 500), 60000)
   const started = Date.now()

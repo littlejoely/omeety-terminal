@@ -24,6 +24,9 @@ const closingSids = new Set() // 主动关闭的 tab（点 ×）：忽略 host �
 let sessionsResolved = false
 let sessionsFallbackTimer = null
 const sessionMetaTimers = new Map()
+let rendererSwitchTimer = null
+let terminalFocusFrame = 0
+let tabScrollFrame = 0
 
 function setStatus(state, text) {
   statusDot.className = "dot " + (state || "")
@@ -106,6 +109,8 @@ function scheduleTabMeta(sid) {
 function createTab(session = {}) {
   const sid = String(session.sid || makeSid())
   if (tabs.has(sid)) return sid
+  clearTimeout(rendererSwitchTimer)
+  rendererSwitchTimer = null
   const hostEl = document.createElement("div")
   // 先把现有 tab 取消激活，新 tab 直接 active——让 initTerminal 里 term.open 时容器已有真实尺寸，
   // 否则在 display:none 的 0 尺寸容器里 open，xterm 的选区/鼠标坐标会失效（表现为复制选不中）。
@@ -120,6 +125,8 @@ function createTab(session = {}) {
   const rec = {
     term: null,
     hostEl,
+    tabEl: null,
+    titleEl: null,
     title: String(session.title || `终端 ${tabs.size + 1}`).slice(0, 80),
     renamed: !!session.renamed,
     punctCompat: !!session.punctCompat,
@@ -172,17 +179,36 @@ function newTab(shell) {
 
 function setActive(sid) {
   if (!tabs.has(sid)) return
+  if (sid === activeSid) {
+    tabs.get(sid)?.term?.focus()
+    renderTabs()
+    return
+  }
   activeSid = sid
   for (const [s, t] of tabs) {
     const active = s === sid
     t.hostEl.classList.toggle("active", active)
-    t.term?.setActive?.(active)
   }
   const t = tabs.get(sid)
-  requestAnimationFrame(() => {
+  if (terminalFocusFrame) cancelAnimationFrame(terminalFocusFrame)
+  terminalFocusFrame = requestAnimationFrame(() => {
+    terminalFocusFrame = 0
+    if (activeSid !== sid) return
     t.term?.resize()
     t.term?.focus()
   })
+
+  // WebGL addon teardown/setup can synchronously block Chromium's main thread.
+  // Keep the click path DOM-only, then coalesce rapid switches and hand the one
+  // GPU renderer to the tab the user actually settled on.
+  clearTimeout(rendererSwitchTimer)
+  rendererSwitchTimer = setTimeout(() => {
+    rendererSwitchTimer = null
+    if (activeSid !== sid || !tabs.has(sid)) return
+    for (const [candidateSid, candidate] of tabs) {
+      candidate.term?.setActive?.(candidateSid === sid)
+    }
+  }, 48)
   renderTabs()
 }
 
@@ -199,6 +225,7 @@ function closeTab(sid) {
     /* ignore */
   }
   t.hostEl.remove()
+  t.tabEl?.remove()
   tabs.delete(sid)
   if (tabs.size === 0) {
     newTab() // 至少留一个 tab
@@ -256,44 +283,64 @@ function openTabMenu(x, y, sid) {
   }, 0)
 }
 
-function renderTabs() {
-  tabsEl.innerHTML = ""
-  let activeEl = null
-  for (const [sid, t] of tabs) {
-    const el = document.createElement("div")
-    el.className = "tab" + (sid === activeSid ? " active" : "")
-    el.title = `${t.title}（点击切换；中键关闭；右键重命名）`
-    const title = document.createElement("span")
-    title.className = "tab-title"
-    title.textContent = t.title
-    const close = document.createElement("span")
-    close.className = "tab-close"
-    close.textContent = "×"
-    close.title = "关闭"
-    close.addEventListener("click", (e) => {
-      e.stopPropagation()
-      closeTab(sid)
-    })
-    // 整个 tab 可点（原来只有标题文字那一小条能点）
-    el.addEventListener("click", () => setActive(sid))
-    // 中键关闭（浏览器/Windows Terminal 通用习惯）
-    el.addEventListener("auxclick", (e) => {
-      if (e.button === 1) {
-        e.preventDefault()
-        closeTab(sid)
-      }
-    })
-    // 右键：菜单（重命名 / codex 标点兼容开关）
-    el.addEventListener("contextmenu", (e) => {
+function ensureTabElement(sid, t) {
+  if (t.tabEl) return t.tabEl
+  const el = document.createElement("div")
+  el.className = "tab"
+  el.dataset.sid = sid
+  const title = document.createElement("span")
+  title.className = "tab-title"
+  const close = document.createElement("span")
+  close.className = "tab-close"
+  close.textContent = "×"
+  close.title = "关闭"
+  close.addEventListener("click", (e) => {
+    e.stopPropagation()
+    closeTab(sid)
+  })
+  el.addEventListener("click", () => setActive(sid))
+  el.addEventListener("auxclick", (e) => {
+    if (e.button === 1) {
       e.preventDefault()
-      openTabMenu(e.clientX, e.clientY, sid)
-    })
-    el.append(title, close)
-    tabsEl.appendChild(el)
+      closeTab(sid)
+    }
+  })
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault()
+    openTabMenu(e.clientX, e.clientY, sid)
+  })
+  el.append(title, close)
+  t.tabEl = el
+  t.titleEl = title
+  return el
+}
+
+function renderTabs() {
+  let activeEl = null
+  const liveElements = new Set()
+  for (const [sid, t] of tabs) {
+    const el = ensureTabElement(sid, t)
+    liveElements.add(el)
+    el.classList.toggle("active", sid === activeSid)
+    el.title = `${t.title}（点击切换；中键关闭；右键重命名）`
+    t.titleEl.textContent = t.title
+    if (el.parentElement !== tabsEl) tabsEl.appendChild(el)
     if (sid === activeSid) activeEl = el
   }
-  // 新选中/添加的 tab 自动滚动到可见（tab 栏 overflow-x 时新 tab 可能在右端被挡住）
-  if (activeEl) activeEl.scrollIntoView({ block: "nearest", inline: "nearest" })
+  for (const child of [...tabsEl.children]) {
+    if (!liveElements.has(child)) child.remove()
+  }
+
+  // Preserve node identity so an OSC title update cannot replace a tab between
+  // pointerdown and click. Scroll only after layout/paint work has left the
+  // click handler, avoiding a forced synchronous layout on every switch.
+  if (tabScrollFrame) cancelAnimationFrame(tabScrollFrame)
+  tabScrollFrame = requestAnimationFrame(() => {
+    tabScrollFrame = 0
+    if (activeEl?.isConnected && activeEl.classList.contains("active")) {
+      activeEl.scrollIntoView({ block: "nearest", inline: "nearest" })
+    }
+  })
 }
 
 function restoreSessions(sessions) {

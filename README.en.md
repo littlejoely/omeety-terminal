@@ -83,6 +83,20 @@ uninstall steps.
 > `./installer/install.sh` (macOS) from the project root — no `npm install` and
 > no network needed for dependencies.
 
+Maintainers must create offline bundles with the allowlist packager, never by
+recursively compressing the working tree:
+
+```bash
+cd host
+npm run package:release
+```
+
+It writes `dist/omeety-terminal-v<version>-offline.zip` plus an archive SHA-256.
+The ZIP also contains `PACKAGE-MANIFEST.json` with the size and SHA-256 of every
+file. Only reviewed runtime files are copied, and production dependencies are
+installed from the lockfile in a fresh temporary directory, so browser profiles,
+logs, local configuration, keys, and backups cannot leak into the bundle.
+
 ## Product role: a browser exoskeleton for agents
 
 Think of the LLM as the operator and CLI agents such as Codex, Claude Code,

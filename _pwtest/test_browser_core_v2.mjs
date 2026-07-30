@@ -39,13 +39,13 @@ function listen(handler) {
 
 const childServer = await listen((_req, res) => {
   res.writeHead(200, { "content-type": "text/html" })
-  res.end("<!doctype html><title>Child</title><button id='child'>Child action</button>")
+  res.end("<!doctype html><title>Child</title><button id='child'>Child action</button><script>window.crossOriginClicks=0;document.querySelector('#child').addEventListener('click',()=>window.crossOriginClicks+=1)</script>")
 })
 const childPort = childServer.address().port
 const mainServer = await listen((req, res) => {
   if (req.url === "/app.js") {
     res.writeHead(200, { "content-type": "text/javascript" })
-    res.end("if(localStorage.getItem('durable')==='1')document.querySelector('#persist-status').textContent='saved-durable';document.addEventListener('click',e=>{if(e.target.id==='stable')document.querySelector('#status').textContent='clicked';if(e.target.closest('#contact-card'))document.querySelector('#contact-status').textContent='contact-clicked';if(e.target.id==='persist'){localStorage.setItem('durable','1');document.querySelector('#persist-status').textContent='saved-durable'}});document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k')document.querySelector('#shortcut-status').textContent='shortcut-open'})")
+    res.end("if(localStorage.getItem('durable')==='1')document.querySelector('#persist-status').textContent='saved-durable';document.addEventListener('click',e=>{if(e.target.id==='stable')document.querySelector('#status').textContent='clicked';if(e.target.closest('#contact-card'))document.querySelector('#contact-status').textContent='contact-clicked';if(e.target.closest('#conversation')){document.querySelector('#conversation').setAttribute('aria-selected','true');document.querySelector('#conversation').classList.add('is-selected');document.querySelector('#conversation-title').textContent='Alice'};if(e.target.closest('#send')){const editor=document.querySelector('#editor');const text=editor.innerText.replace(/[\\u200B-\\u200D\\uFEFF]/g,'').trim();editor.innerHTML='<p><br></p>';document.querySelector('#messages').insertAdjacentHTML('beforeend','<div class=message>'+text.replace(/</g,'&lt;')+'</div>')};if(e.target.id==='persist'){localStorage.setItem('durable','1');document.querySelector('#persist-status').textContent='saved-durable'}});document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k')document.querySelector('#shortcut-status').textContent='shortcut-open'})")
     return
   }
   res.writeHead(200, {
@@ -53,7 +53,7 @@ const mainServer = await listen((req, res) => {
     "content-security-policy": "default-src 'self' http://localhost:*; script-src 'self'; frame-src http://localhost:*",
   })
   const denseControls = Array.from({ length: 40 }, (_, index) => `<section class="workspace"><div class="toolbar"><div class="action-slot"><button id="action-${index}">Action ${index}</button></div></div></section>`).join("")
-  res.end(`<!doctype html><title>Browser Core v2</title><button id="stable" aria-label="Save record">Save record</button><div id="status">idle</div><div id="contact-card" class="contact-card" style="cursor:pointer"><span class="contact-name">王宇楠</span></div><div id="contact-status">idle</div><input id="shortcut"><div id="shortcut-status">idle</div><button id="noop">No-op</button><div id="already">already-there</div><button id="persist">Persist</button><div id="persist-status">idle</div>${denseControls}<iframe src="http://localhost:${childPort}/"></iframe><script src="/app.js"></script>`)
+  res.end(`<!doctype html><title>Browser Core v2</title><button id="stable" aria-label="Save record">Save record</button><div id="status">idle</div><div id="contact-card" class="contact-card" style="cursor:pointer"><span class="contact-name">王宇楠</span></div><div id="contact-status">idle</div><div id="conversation" role="tab" aria-selected="false"><span>Alice</span></div><div id="conversation-title">Inbox</div><div id="editor" role="textbox" contenteditable="true"><p><br></p></div><button id="send"><svg data-icon="SendColorful"><title>Send message</title></svg></button><div id="messages"></div><input id="shortcut"><div id="shortcut-status">idle</div><button id="noop">No-op</button><div id="already">already-there</div><button id="persist">Persist</button><div id="persist-status">idle</div>${denseControls}<iframe src="http://localhost:${childPort}/"></iframe><script src="/app.js"></script>`)
 })
 
 const profile = await mkdtemp(path.join(os.tmpdir(), "omeety-browser-core-v2-"))
@@ -82,12 +82,15 @@ try {
   }
   const worker = workers[0]
 
-  const contentTool = (name, args) => worker.evaluate(async ({ url, name, args }) => {
-    const tabs = await chrome.tabs.query({})
-    const tab = tabs.find((item) => item.url === url)
+  const testTabId = await worker.evaluate(async (url) => {
+    const tab = (await chrome.tabs.query({})).find((item) => item.url === url)
     if (!tab) throw new Error("test tab missing")
-    return await chrome.tabs.sendMessage(tab.id, { type: "omeety_execute_tool", tool: name, arguments: args })
-  }, { url, name, args })
+    return tab.id
+  }, url)
+
+  const contentTool = (name, args) => worker.evaluate(async ({ tabId, name, args }) => {
+    return await chrome.tabs.sendMessage(tabId, { type: "omeety_execute_tool", tool: name, arguments: args })
+  }, { tabId: testTabId, name, args })
 
   const snapshot = await contentTool("omeety_get_page_snapshot", { maxInteractive: 50 })
   const target = snapshot.interactive.find((item) => item.text === "Save record")
@@ -160,6 +163,32 @@ try {
   assert.equal(preexisting.result.verified, false, JSON.stringify(preexisting))
   assert.equal(preexisting.result.verificationStrength, "precondition-already-satisfied")
 
+  const conversation = await worker.evaluate(async (tabId) => {
+    return await globalThis.__omeetyActAndVerify(tabId, { action: "click", selector: "#conversation", confirmed: true, expect: { text: "Alice" }, timeoutMs: 2000 })
+  }, testTabId)
+  assert.equal(conversation.result.verified, true, JSON.stringify(conversation))
+  assert.equal(conversation.result.verificationStrength, "target-state-transition")
+  assert.equal(conversation.result.after.target.selected, true)
+
+  await page.evaluate(() => { document.querySelector("#editor").innerHTML = "<p>Hello\u200b</p><p>World</p>" })
+  const richText = await contentTool("omeety_wait_for", { targetSelector: "#editor", valueEquals: "Hello\nWorld", probeOnly: true })
+  assert.equal(richText.found, true, JSON.stringify(richText))
+  const semanticSnapshot = await contentTool("omeety_get_page_snapshot", { maxInteractive: 80 })
+  const sendButton = semanticSnapshot.interactive.find((item) => item.text === "SendColorful")
+  assert.ok(sendButton?.uid, JSON.stringify(semanticSnapshot.interactive))
+  const sent = await worker.evaluate(async ({ tabId, uid }) => {
+    return await globalThis.__omeetyActAndVerify(tabId, {
+      action: "click",
+      uid,
+      confirmed: true,
+      expect: { targetSelector: "#editor", valueEquals: "", text: "Hello", match: "all" },
+      timeoutMs: 2000,
+    })
+  }, { tabId: testTabId, uid: sendButton.uid })
+  assert.equal(sent.result.verified, true, JSON.stringify(sent))
+  assert.equal((await page.locator("#editor").innerText()).trim(), "")
+  assert.match(await page.locator("#messages").innerText(), /Hello.*World/s)
+
   const durable = await worker.evaluate(async (url) => {
     const tab = (await chrome.tabs.query({})).find((item) => item.url === url)
     return await globalThis.__omeetyActAndVerify(tab.id, {
@@ -195,6 +224,16 @@ try {
   assert.equal(backgroundCapture.result.transport, "cdp:Page.captureScreenshot")
   assert.match(backgroundCapture.result.dataUrl, /^data:image\/jpeg;base64,/)
   await foreground.close()
+
+  // A UID observed on origin A must produce zero clicks after the same tab moves
+  // to origin B, even when both documents have their own first interactive node.
+  await page.goto(`http://localhost:${childPort}/`, { waitUntil: "domcontentloaded" })
+  const staleUid = await worker.evaluate(async ({ tabId, uid }) => {
+    return await globalThis.__omeetyActAndVerify(tabId, { action: "click", uid, confirmed: true, verify: false })
+  }, { tabId: testTabId, uid: target.uid })
+  assert.equal(staleUid.ok, false, JSON.stringify(staleUid))
+  assert.match(staleUid.error, /页面上下文已失效|另一个页面文档|不存在或已失效/)
+  assert.equal(await page.evaluate(() => window.crossOriginClicks), 0)
 
   const panel = await context.newPage()
   await panel.setViewportSize({ width: 420, height: 780 })

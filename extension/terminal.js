@@ -257,22 +257,44 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
   // buffer，但释放 GPU renderer；切回时再恢复 WebGL。这样多 tab 不会按 tab 数累积纹理/
   // canvas 显存，也不影响后台 CLI Agent 持续运行。
   let webglAddon = null
+  let webglContextLoss = null
+  let webglUnavailable = false
   let renderActive = true
   hostEl.dataset.omeetyRenderer = "dom"
   function enableWebgl() {
-    if (webglAddon || !renderActive || !window.WebglAddon) return
+    if (webglAddon || !renderActive) return
+    if (webglUnavailable || !window.WebglAddon) {
+      hostEl.dataset.omeetyRenderer = "dom-fallback"
+      return
+    }
+    let addon = null
     try {
-      webglAddon = new window.WebglAddon()
-      term.loadAddon(webglAddon)
+      addon = new window.WebglAddon()
+      term.loadAddon(addon)
+      webglAddon = addon
+      if (typeof addon.onContextLoss === "function") {
+        webglContextLoss = addon.onContextLoss(() => {
+          if (webglAddon !== addon) return
+          webglUnavailable = true
+          try { webglContextLoss?.dispose?.() } catch { /* ignore */ }
+          webglContextLoss = null
+          try { addon.dispose() } catch { /* ignore */ }
+          webglAddon = null
+          hostEl.dataset.omeetyRenderer = "dom-fallback"
+        })
+      }
       hostEl.dataset.omeetyRenderer = "webgl"
       cgWrapRenderRows()
     } catch (e) {
+      try { addon?.dispose?.() } catch { /* ignore */ }
       webglAddon = null
       hostEl.dataset.omeetyRenderer = "dom-fallback"
       console.warn("[omeety] WebGL 渲染器加载失败，退回 DOM：", e)
     }
   }
   function disableWebgl() {
+    try { webglContextLoss?.dispose?.() } catch { /* ignore */ }
+    webglContextLoss = null
     if (webglAddon) {
       try { webglAddon.dispose() } catch { /* ignore */ }
       webglAddon = null
@@ -743,7 +765,9 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
     },
     setActive(active) {
       if (_disposed) return
-      renderActive = !!active
+      const next = !!active
+      if (renderActive === next) return
+      renderActive = next
       if (renderActive) {
         enableWebgl()
         requestAnimationFrame(() => {

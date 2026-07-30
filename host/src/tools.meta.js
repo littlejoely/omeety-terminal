@@ -8,6 +8,10 @@ const EXPECTATION_SCHEMA = {
     urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
     targetUid: { type: "string" }, targetSelector: { type: "string" },
     valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+    selected: { type: "boolean", description: "Require the target to be selected/pressed/checked." },
+    ariaCurrent: { type: "string", description: "Require the target's aria-current value." },
+    classIncludes: { type: "string", description: "Require the target className to include this token/text." },
+    targetTextEquals: { type: "string" }, targetTextIncludes: { type: "string" },
     persistAfterReload: { type: "boolean", description: "Reload after the condition matches and require it to remain true before reporting committed." },
     match: { type: "string", enum: ["all", "any"], default: "all" },
     timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
@@ -63,7 +67,7 @@ export const TOOLS = [
   },
   {
     name: "omeety_browser_act",
-    description: "Perform one Browser Core action with target pinning and verification. completionLevel is dispatched, applied, or committed; committed requires expect.persistAfterReload:true and a post-reload match.",
+    description: "Perform one Browser Core action with target pinning and verification. completionLevel is dispatched, applied, or committed; committed requires expect.persistAfterReload:true and a post-reload match. For rich-text chat, query and click an explicit send control (including icon semantics such as SendColorful) instead of guessing Enter; verify the editor valueEquals:'' and the sent message text appears.",
     inputSchema: {
       type: "object",
       properties: {
@@ -93,7 +97,7 @@ export const TOOLS = [
   },
   {
     name: "omeety_browser_wait",
-    description: "Wait across reloads, navigations and BFCache for page, URL, text or target-value postconditions.",
+    description: "Wait across reloads, navigations and BFCache for page, URL, text, target value, selected state, aria-current, class or target-text postconditions.",
     inputSchema: { type: "object", properties: { tabId: { type: "integer" }, ...WAIT_EXPECTATION_PROPERTIES } },
   },
   {
@@ -420,7 +424,7 @@ export const TOOLS = [
   {
     name: "omeety_wait_for",
     description:
-      "Wait for one or all page postconditions in a pinned tab: selector/text appears, selector/text disappears, URL/title contains, target value equals/includes, or checked state. Polls every 200ms and survives reload, navigation, BFCache, and user tab switches when tabId is supplied. Defaults to any condition; match:'all' requires every condition.",
+      "Wait for one or all page postconditions in a pinned tab: selector/text appears, selector/text disappears, URL/title contains, or target value/checked/selected/aria-current/class/text state matches. Polls every 200ms and survives reload, navigation, BFCache, and user tab switches when tabId is supplied. Defaults to any condition; match:'all' requires every condition.",
     inputSchema: {
       type: "object",
       properties: {
@@ -429,6 +433,8 @@ export const TOOLS = [
         urlIncludes: { type: "string" }, titleIncludes: { type: "string" },
         targetUid: { type: "string" }, targetSelector: { type: "string" },
         valueEquals: { type: "string" }, valueIncludes: { type: "string" }, checked: { type: "boolean" },
+        selected: { type: "boolean" }, ariaCurrent: { type: "string" }, classIncludes: { type: "string" },
+        targetTextEquals: { type: "string" }, targetTextIncludes: { type: "string" },
         match: { type: "string", enum: ["all", "any"], default: "any" },
         timeoutMs: { type: "integer", minimum: 500, maximum: 60000 },
       },

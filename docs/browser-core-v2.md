@@ -27,8 +27,9 @@ Host 维护标签页、Target、Frame 和文档代次，不再只依赖“调用
 
 1. **统一观察**：`omeety_browser_observe` 合并页面语义、DOMSnapshot、Accessibility
    Tree 和 Frame/Target 拓扑；`deep:false` 可保留轻量调用。
-2. **稳定查询与定位**：`omeety_browser_query` 返回排序后的候选；旧 `uN` 失效时，按
-   role、label、text、属性、父节点、选择器和几何位置评分恢复，歧义时停止操作。
+2. **稳定查询与定位**：`omeety_browser_query` 返回排序后的候选；UID 按
+   `tabId + documentEpoch + origin + documentId` 限定恢复范围，同一文档重渲染时按
+   role、label、text、属性、父节点、选择器和几何位置评分恢复，跨文档或歧义时在派发前停止操作。
 3. **动作事务**：`omeety_browser_act` 和 `omeety_browser_transaction` 默认走
    `omeety_act_and_verify`，支持后置条件、失败即停、跨导航等待和有限自动重试。
 4. **目标生命周期**：Host 注册标签页、Frame、OOPIF 和文档代次；工具继续支持显式
@@ -51,6 +52,10 @@ Host 维护标签页、Target、Frame 和文档代次，不再只依赖“调用
 - 导航与刷新等待绑定新的文档代次，避免旧页面的同名文本提前满足后置条件。
 - `press_key` 支持 Meta/Control/Alt/Shift 组合键。显式锁定非活动 tab 的截图改用
   `Page.captureScreenshot`，不再截到前台的另一个标签页。
+- `contenteditable` 后置条件按归一化纯文本校验，统一处理零宽字符、段落和换行；
+  icon-only 控件会提取子 SVG 的 `data-icon`/`title`（例如 `SendColorful`）。
+- SPA 点击可用 `selected`、`ariaCurrent`、`classIncludes`、`targetTextEquals/Includes`
+  验证目标级状态变化。富文本发送应查找明确发送控件，并同时验证编辑器清空与消息出现。
 
 ## 使用差异
 
@@ -94,9 +99,11 @@ npm test
 
 cd ..
 node _pwtest/test_browser_core_v2.mjs
+
+python _pwtest/test_browser_semantic_regressions.py
 ```
 
-第二条测试使用本机可用的 Node Playwright 和独立临时浏览器配置，验证真实重渲染、
+后两条测试使用本机可用的 Playwright 和独立临时浏览器配置，验证真实重渲染、
 OOPIF、DOMSnapshot、Accessibility 与 420px 宽侧栏布局，不读取个人浏览器 Profile。
 
 ## 边界

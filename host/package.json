@@ -10,6 +10,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/fix-node-pty-permissions.cjs",
+    "package:release": "node scripts/package-release.mjs",
     "test": "npm run test:runtime && npm run test:core && npm run test:replay && npm run test:log && npm run test:download && npm run test:smoke",
     "test:runtime": "node ../_test/extension-runtime-regression.mjs",
     "test:core": "node ../_test/browser-core.mjs",

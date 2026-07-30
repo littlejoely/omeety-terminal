@@ -58,6 +58,23 @@ cd host
 npm test
 ```
 
+Create an offline release bundle only through the reviewed allowlist packager:
+
+```bash
+cd host
+npm run package:release
+```
+
+The command installs production dependencies from `package-lock.json` in a
+fresh temporary directory, rejects profiles, logs, local configuration, keys,
+backups, and symlinks, then writes a versioned ZIP, a per-file manifest, and an
+archive SHA-256 under `dist/`. Never create a release by recursively compressing
+the working tree.
+
+创建离线发布包时必须使用上述白名单打包器，不要直接递归压缩工作区。打包器会在
+全新临时目录中按 `package-lock.json` 安装生产依赖，并拒绝浏览器 Profile、日志、
+本地配置、密钥、备份和符号链接。
+
 The smoke runner has a 30-second hard timeout and cleans up its Host/PTY on
 success, failure, interruption, and timeout. Do not register it as a persistent
 `launchctl` or Task Scheduler job.

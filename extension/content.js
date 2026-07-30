@@ -16,6 +16,11 @@ let lastPageSnapshot = null
 const locatorMemory = new Map()
 const locatorRecovery = { attempts: 0, recovered: 0, ambiguous: 0, failed: 0, last: null }
 const LOCATOR_MEMORY_MAX = 2000
+// UID 必须属于一个具体 document。旧实现每次导航都从 u1 重新编号，导致旧页面的
+// u1 在另一个 origin 上可能直接命中新页面的 u1。随机 document id 既阻止跨 tab/
+// 跨导航碰撞，又允许同一 document 内的 React/Vue 重渲染继续走 locator 恢复。
+const DOCUMENT_ID = crypto.randomUUID()
+const DOCUMENT_UID_PREFIX = `u${DOCUMENT_ID.replaceAll("-", "").slice(0, 12)}`
 
 // 自包含模式只处理工具执行请求；不再有 Codeg bootstrap / xyy_* 混淆 shim / 注册逻辑。
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -254,6 +259,7 @@ async function getPageSnapshot(args = {}) {
   const maxTextLength = clamp(Number(args.maxTextLength ?? defaultTextLength), 0, 60000)
   const snapshot = {
     browserSessionId,
+    documentId: DOCUMENT_ID,
     url: location.href,
     origin: location.origin,
     title: document.title,
@@ -455,7 +461,7 @@ let uidCounter = 0
 function uidFor(el) {
   let u = uidMap.get(el)
   if (!u) {
-    u = "u" + ++uidCounter
+    u = `${DOCUMENT_UID_PREFIX}-${++uidCounter}`
     uidMap.set(el, u)
   }
   el.setAttribute("data-omeety-uid", u)
@@ -519,6 +525,11 @@ function labelOf(el) {
   if (imgAlt.trim()) return compactText(imgAlt)
   const tip = el.getAttribute("data-tip") || el.getAttribute("data-tooltip") || el.getAttribute("aria-title") || ""
   if (tip.trim()) return compactText(tip)
+  // 飞书等应用的 icon-only button 常把唯一语义放在子 SVG 的 data-icon/title 上。
+  // 保留原 icon 名（如 SendColorful），便于 agent 精确 query，而不是返回一个空按钮。
+  const icon = el.matches?.("[data-icon]") ? el : el.querySelector?.("[data-icon]")
+  const iconName = icon?.getAttribute?.("data-icon") || icon?.querySelector?.("title")?.textContent || el.querySelector?.("svg title")?.textContent || ""
+  if (iconName.trim()) return compactText(iconName)
   return null
 }
 
@@ -539,6 +550,8 @@ function locatorSignature(el) {
     selector: cssPath(el),
     parentTag: parent?.tagName?.toLowerCase?.() || null,
     parentLabel: compactText(parent ? labelOf(parent) || "" : ""),
+    origin: location.origin,
+    documentId: DOCUMENT_ID,
     bbox: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
   }
 }
@@ -589,9 +602,14 @@ function findByUid(uid) {
   let el = hits[0] || null
   if (!el && u === "pick") el = queryAllDeep('[data-omeety-pick="1"]')[0] || null
   if (!el && /^pick-\d+$/.test(u)) el = queryAllDeep(`[data-omeety-pick-id="${CSS.escape(u)}"]`)[0] || null
-  if (!el && /^u\d+$/.test(u) && locatorMemory.has(u)) {
+  if (!el && /^u(?:\d+|[a-f0-9]{12}-\d+)$/.test(u) && locatorMemory.has(u)) {
     locatorRecovery.attempts += 1
     const signature = locatorMemory.get(u)
+    if (signature.origin !== location.origin || signature.documentId !== DOCUMENT_ID) {
+      locatorRecovery.failed += 1
+      locatorRecovery.last = { uid: u, rejected: "document-context-mismatch", at: new Date().toISOString() }
+      throw new Error(`uid "${uid}" 属于另一个页面文档，已在派发前拒绝；请重新 get_page_snapshot`)
+    }
     const candidates = queryAllDeep(signature.tag).filter((candidate) => candidate.isConnected)
     const ranked = candidates
       .map((candidate) => ({ candidate, score: locatorScore(signature, candidate) }))
@@ -616,7 +634,7 @@ function findByUid(uid) {
   if (!el) {
     throw new Error(`uid "${uid}" 不存在或已失效（页面可能重渲染过；重新 get_page_snapshot 或重新点 📌 选取）`)
   }
-  if (/^u\d+$/.test(u)) rememberLocator(u, el)
+  if (/^u(?:\d+|[a-f0-9]{12}-\d+)$/.test(u)) rememberLocator(u, el)
   return el
 }
 
@@ -729,7 +747,7 @@ function browserQuery(args = {}) {
     .filter((item) => (!args.visibleOnly || item.visible) && (!query && !role ? true : item.score > 0))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-  return { query, role: role || null, selector: selector || null, count: ranked.length, matches: ranked, locatorRecovery: { ...locatorRecovery, remembered: locatorMemory.size }, metrics: { queryMs: Math.round((performance.now() - started) * 10) / 10, candidatesScanned: items.length } }
+  return { documentId: DOCUMENT_ID, origin: location.origin, url: location.href, query, role: role || null, selector: selector || null, count: ranked.length, matches: ranked, locatorRecovery: { ...locatorRecovery, remembered: locatorMemory.size }, metrics: { queryMs: Math.round((performance.now() - started) * 10) / 10, candidatesScanned: items.length } }
 }
 
 function getSelectedContext() {
@@ -894,13 +912,19 @@ function getVerificationState(args = {}) {
   }
   const targetState = target
     ? {
+        uid: uidFor(target),
         exists: true,
         visible: isVisible(target),
         text: compactText(target.innerText || target.textContent || ""),
         accessibleName: labelOf(target),
         role: target.getAttribute("role") || inferRole(target),
-        value: "value" in target && String(target.type || "").toLowerCase() !== "password" ? String(target.value || "").slice(0, 1000) : null,
+        value: (target.isContentEditable || "value" in target) && String(target.type || "").toLowerCase() !== "password"
+          ? normalizeEditableText(getEditableText(target)).slice(0, 1000)
+          : null,
         checked: "checked" in target ? Boolean(target.checked) : null,
+        selected: getSelectedState(target),
+        ariaCurrent: target.getAttribute("aria-current") || null,
+        className: typeof target.className === "string" ? target.className.slice(0, 500) : null,
         disabled: Boolean(target.disabled || target.getAttribute("aria-disabled") === "true"),
         bbox: (() => {
           const r = getTopViewportRect(target)
@@ -910,6 +934,8 @@ function getVerificationState(args = {}) {
     : { exists: false }
   const visibleText = collectVisibleText(6000)
   return {
+    documentId: DOCUMENT_ID,
+    origin: location.origin,
     url: location.href,
     title: document.title,
     textDigest: fnv1a(visibleText),
@@ -1016,7 +1042,7 @@ function rollbackPreviewPatch(patchId) {
 
 async function clickElement(args) {
   const element = args.uid ? findByUid(args.uid) : mustFind(args.selector)
-  const label = element.innerText || element.value || element.getAttribute("aria-label") || args.selector || args.uid
+  const label = labelOf(element) || args.selector || args.uid
   if (!args.confirmed && DANGEROUS_RE.test(label)) {
     if (args.backgroundTask) {
       throw new Error(
@@ -1077,7 +1103,7 @@ function clickAt(args) {
   const y = clamp(Number(args.y), 0, Math.max(0, window.innerHeight - 1))
   const element = document.elementFromPoint(x, y)
   if (!element) throw new Error(`No element found at viewport coordinate ${x},${y}`)
-  const label = element.innerText || element.value || element.getAttribute("aria-label") || cssPath(element)
+  const label = labelOf(element) || cssPath(element)
   if (!args.confirmed && DANGEROUS_RE.test(label)) {
     const approved = window.confirm(`Agent wants to click "${String(label).trim()}". Continue?`)
     if (!approved) throw new Error("User rejected dangerous coordinate click")
@@ -1229,7 +1255,12 @@ async function waitFor(args) {
   const valueEquals = args.valueEquals !== undefined ? String(args.valueEquals) : null
   const valueIncludes = args.valueIncludes !== undefined ? String(args.valueIncludes) : null
   const checked = typeof args.checked === "boolean" ? args.checked : null
-  if (![selector, text, selectorGone, textGone, urlIncludes, titleIncludes, valueEquals, valueIncludes, checked].some((value) => value !== null)) {
+  const selected = typeof args.selected === "boolean" ? args.selected : null
+  const ariaCurrent = args.ariaCurrent !== undefined ? String(args.ariaCurrent) : null
+  const classIncludes = args.classIncludes !== undefined ? String(args.classIncludes) : null
+  const targetTextEquals = args.targetTextEquals !== undefined ? String(args.targetTextEquals) : null
+  const targetTextIncludes = args.targetTextIncludes !== undefined ? String(args.targetTextIncludes) : null
+  if (![selector, text, selectorGone, textGone, urlIncludes, titleIncludes, valueEquals, valueIncludes, checked, selected, ariaCurrent, classIncludes, targetTextEquals, targetTextIncludes].some((value) => value !== null)) {
     throw new Error("wait_for 需要 selector/text/url/title/value/checked 等至少一个条件")
   }
   const started = Date.now()
@@ -1257,16 +1288,28 @@ async function waitFor(args) {
     }
     if (urlIncludes) conditions.push({ kind: "urlIncludes", matched: location.href.includes(urlIncludes), element: null })
     if (titleIncludes) conditions.push({ kind: "titleIncludes", matched: document.title.includes(titleIncludes), element: null })
-    if (valueEquals !== null || valueIncludes !== null || checked !== null) {
+    if (valueEquals !== null || valueIncludes !== null || checked !== null || selected !== null || ariaCurrent !== null || classIncludes !== null || targetTextEquals !== null || targetTextIncludes !== null) {
       let target = null
       try {
         if (args.targetUid) target = findByUid(args.targetUid)
         else if (args.targetSelector) target = queryAllDeep(String(args.targetSelector))[0] || null
       } catch { target = null }
-      const value = target && "value" in target ? String(target.value ?? "") : ""
-      if (valueEquals !== null) conditions.push({ kind: "valueEquals", matched: !!target && value === valueEquals, element: target })
-      if (valueIncludes !== null) conditions.push({ kind: "valueIncludes", matched: !!target && value.includes(valueIncludes), element: target })
+      const hasEditableValue = !!target && (target.isContentEditable || "value" in target)
+      const value = hasEditableValue ? normalizeEditableText(getEditableText(target)) : ""
+      const expectedValue = normalizeEditableText(valueEquals)
+      const expectedIncludes = normalizeEditableText(valueIncludes)
+      const targetText = target ? normalizeEditableText(target.innerText || target.textContent || "") : ""
+      if (valueEquals !== null) conditions.push({ kind: "valueEquals", matched: hasEditableValue && value === expectedValue, element: target })
+      if (valueIncludes !== null) conditions.push({ kind: "valueIncludes", matched: hasEditableValue && value.includes(expectedIncludes), element: target })
       if (checked !== null) conditions.push({ kind: "checked", matched: !!target && Boolean(target.checked) === checked, element: target })
+      if (selected !== null) {
+        const targetSelected = getSelectedState(target)
+        conditions.push({ kind: "selected", matched: targetSelected !== null && targetSelected === selected, element: target })
+      }
+      if (ariaCurrent !== null) conditions.push({ kind: "ariaCurrent", matched: !!target && String(target.getAttribute("aria-current") || "") === ariaCurrent, element: target })
+      if (classIncludes !== null) conditions.push({ kind: "classIncludes", matched: !!target && String(target.className || "").includes(classIncludes), element: target })
+      if (targetTextEquals !== null) conditions.push({ kind: "targetTextEquals", matched: !!target && targetText === normalizeEditableText(targetTextEquals), element: target })
+      if (targetTextIncludes !== null) conditions.push({ kind: "targetTextIncludes", matched: !!target && targetText.includes(normalizeEditableText(targetTextIncludes)), element: target })
     }
     const matched = args.match === "all" ? conditions.every((condition) => condition.matched) : conditions.some((condition) => condition.matched)
     return { matched, conditions }
@@ -1424,9 +1467,31 @@ function setNativeValue(element, value) {
 
 function getEditableText(element) {
   if (!element) return ""
-  if (element.isContentEditable) return element.textContent || ""
+  if (element.isContentEditable) return element.innerText || element.textContent || ""
   if ("value" in element) return String(element.value || "")
   return ""
+}
+
+function getSelectedState(target) {
+  if (!target) return null
+  if (target.hasAttribute?.("aria-selected")) return target.getAttribute("aria-selected") === "true"
+  if (target.hasAttribute?.("aria-pressed")) return target.getAttribute("aria-pressed") === "true"
+  if ("checked" in target) return Boolean(target.checked)
+  if ("selected" in target) return Boolean(target.selected)
+  return null
+}
+
+// 富文本编辑器会用 div/p/br 表示段落，并混入零宽字符。校验层统一为纯文本，
+// 避免实际 fill 成功后仍因 DOM 表示差异一直等待到超时。
+function normalizeEditableText(value) {
+  if (value === null || value === undefined) return ""
+  return String(value)
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t\f\v ]+\n/g, "\n")
+    .replace(/\n[\t\f\v ]+/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim()
 }
 
 function dispatchKeyboardEvent(element, type, key, init = {}) {
@@ -1577,7 +1642,7 @@ function describeForm(form) {
 function describeClickable(element) {
   return {
     ...describeElement(element),
-    text: compactText(element.innerText || element.value || element.getAttribute("title") || ""),
+    text: labelOf(element),
     href: element.href || null,
   }
 }
@@ -1589,7 +1654,7 @@ function describeInput(element) {
     name: element.getAttribute("name"),
     placeholder: element.getAttribute("placeholder"),
     label: findLabel(element),
-    valuePreview: "value" in element ? String(element.value || "").slice(0, 80) : null,
+    valuePreview: element.isContentEditable || "value" in element ? normalizeEditableText(getEditableText(element)).slice(0, 80) : null,
   }
 }
 
