@@ -6,6 +6,14 @@ Omeety Terminal 的重要公开变更记录在此处。
 
 ## [Unreleased]
 
+### Fixed / 修复
+
+- Keep the visible terminal cursor on the real input column while narrow Agent TUI
+  layouts (including Codex and Claude Code) redraw elapsed time, token usage, the composer, and status animations;
+  vertical composer movement stays responsive and typed input retains its fast path.
+- 修复窄侧栏中 Agent 重绘运行时间、Token、输入框和状态动画时，终端光标在多行之间
+  来回跳动的问题；输入框纵向移动仍保持顺滑，用户键入继续走低延迟通道。
+
 ## [0.2.0] - 2026-07-30
 
 Browser Core v2, durable browser actions, and cross-frame reliability / Browser Core v2、可靠浏览器操作与跨 Frame 能力。

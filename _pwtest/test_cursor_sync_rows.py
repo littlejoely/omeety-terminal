@@ -90,7 +90,9 @@ def main():
                 assert all(frame_hash == baseline_hash for frame_hash in frame_hashes)
 
                 write_and_paint(page, '\x1b[?2026l')
-                page.wait_for_timeout(250)
+                # Background redraws use a 500 ms settle window so narrow-screen
+                # Codex frame fragments cannot expose an intermediate cursor.
+                page.wait_for_timeout(650)
                 final = terminal_state(page)
                 final_cursor = cursor_tuple(final)
                 buffer_cursor = (final.get('cursorX'), final.get('cursorY'))
