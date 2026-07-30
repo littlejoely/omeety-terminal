@@ -11,6 +11,12 @@ from test_cursor_probe import EXT, EXT_ID, PROFILE_ROOT
 
 
 os.environ['OMEETY_MCP_PORT'] = '49473'
+TEST_AGENT = os.environ.get('OMEETY_TEST_AGENT', 'codex').strip().lower()
+TEST_SHELL = os.environ.get('OMEETY_TEST_SHELL', 'powershell').strip().lower()
+if TEST_AGENT not in {'codex', 'claude'}:
+    raise ValueError(f'unsupported OMEETY_TEST_AGENT={TEST_AGENT!r}')
+if TEST_SHELL not in {'powershell', 'cmd'}:
+    raise ValueError(f'unsupported OMEETY_TEST_SHELL={TEST_SHELL!r}')
 
 
 def buffer_text(page):
@@ -36,13 +42,13 @@ def wait_for_working(page, timeout=45):
     last = ''
     while time.time() < end:
         last = buffer_text(page)
-        if 'Working' in last and 'esc to interrupt' in last:
+        if 'esc to interrupt' in last or ('Bash(' in last and 'ACTIVE_CURSOR_TICK' in last):
             return last
         try:
             page.wait_for_timeout(100)
         except Exception as error:
             raise AssertionError(f'page closed while waiting for Working; tail={last!r}') from error
-    raise AssertionError(f'Codex never entered Working state; tail={last!r}')
+    raise AssertionError(f'{TEST_AGENT} never entered active state; tail={last!r}')
 
 
 def wait_for_text(page, markers, timeout=30):
@@ -72,7 +78,9 @@ def wait_for_text_count(page, marker, count=2, timeout=30):
 def main():
     PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
     profile = Path(tempfile.mkdtemp(prefix='cursor-active-codex-', dir=PROFILE_ROOT))
-    run_root = Path(tempfile.gettempdir())
+    # Keep the command short enough that its marker is not split differently by
+    # narrow and wide terminal geometries.
+    run_root = Path(r'C:\tmp')
     run_root.mkdir(parents=True, exist_ok=True)
     run_dir = Path(tempfile.mkdtemp(prefix='omeety-cursor-codex-', dir=run_root))
     try:
@@ -81,7 +89,9 @@ def main():
                 str(profile),
                 channel='msedge',
                 headless=False,
-                viewport={'width': 900, 'height': 760},
+                # Match the real Edge side-panel geometry from the regression report.
+                # Narrow wrapping changes Codex's row layout and cursor transactions.
+                viewport={'width': 387, 'height': 952},
                 args=[
                     f'--disable-extensions-except={EXT}',
                     f'--load-extension={EXT}',
@@ -115,6 +125,11 @@ def main():
                 # give it one paint turn, then type a command and wait for that command's
                 # own marker instead of depending on the optional shell prompt.
                 page.wait_for_timeout(2500)
+                if TEST_SHELL == 'cmd':
+                    page.click('#settingsToggle')
+                    page.select_option('#shellSelect', 'cmd')
+                    page.click('#saveBtn')
+                    page.wait_for_timeout(2500)
                 vpn_command = os.environ.get('OMEETY_TEST_VPN_COMMAND', '').strip()
                 if vpn_command:
                     page.keyboard.type(
@@ -129,29 +144,39 @@ def main():
                         'VPN_STAGE=' + json.dumps(vpn_stage[-1200:], ensure_ascii=False),
                         flush=True,
                     )
-                page.keyboard.type(
-                    f"Set-Location -LiteralPath '{run_dir}'; Write-Output OMEETY_WORKDIR_READY",
-                    delay=1,
-                )
+                if TEST_SHELL == 'cmd':
+                    workdir_command = f'cd /d "{run_dir}" && echo OMEETY_WORKDIR_READY'
+                    workdir_prompt = f'{run_dir}>'
+                else:
+                    workdir_command = f"Set-Location -LiteralPath '{run_dir}'; Write-Output OMEETY_WORKDIR_READY"
+                    workdir_prompt = f'PS {run_dir}>'
+                page.keyboard.type(workdir_command, delay=1)
                 page.keyboard.press('Enter')
-                workdir_stage = wait_for_text_count(page, 'OMEETY_WORKDIR_READY', count=2, timeout=10)
-                print('WORKDIR=' + str(run_dir), flush=True)
+                wait_for_text_count(page, 'OMEETY_WORKDIR_READY', count=1, timeout=10)
+                workdir_stage = wait_for_text(page, [workdir_prompt], timeout=10)
+                print(f'MATRIX={TEST_AGENT}+{TEST_SHELL} WORKDIR={run_dir}', flush=True)
                 assert str(run_dir) in workdir_stage, workdir_stage
 
-                command = (
-                    'codex --no-alt-screen --disable apps -a never -s workspace-write '
-                    '-c mcp_servers.omeety_terminal.enabled=false '
-                    '"Run a PowerShell loop that prints ACTIVE_CURSOR_TICK once per second '
-                    'for 18 seconds. Wait for the command to finish before replying."'
+                task = (
+                    'Run a PowerShell loop that prints ACTIVE_CURSOR_TICK once per second '
+                    'for 18 seconds. Wait for the command to finish before replying.'
                 )
+                if TEST_AGENT == 'claude':
+                    command = f'claude --dangerously-skip-permissions --no-chrome "{task}"'
+                else:
+                    command = (
+                        'codex --no-alt-screen --disable apps -a never -s workspace-write '
+                        '-c mcp_servers.omeety_terminal.enabled=false '
+                        f'"{task}"'
+                    )
                 page.keyboard.type(command, delay=1)
                 page.keyboard.press('Enter')
                 startup = wait_for_text(
                     page,
-                    ['Do you trust the contents of this directory?', 'Working'],
+                    ['Do you trust the contents of this directory?', 'Yes, I trust this folder', 'esc to interrupt'],
                     timeout=35,
                 )
-                if 'Do you trust the contents of this directory?' in startup:
+                if 'Do you trust the contents of this directory?' in startup or 'Yes, I trust this folder' in startup:
                     # The directory is a newly-created empty test sandbox. The first option
                     # (Yes, continue) is selected by default.
                     page.keyboard.press('Enter')
@@ -178,10 +203,12 @@ def main():
                           ms: Math.round(now - started),
                           rendered: cursor ? [cursor.x, cursor.y] : null,
                           buffer: [b.cursorX, b.cursorY],
-                          pending: host.dataset.omeetyCursorGuardPending,
-                          committed: host.dataset.omeetyCursorGuardCommitted || null,
+                          pending: host.dataset.omeetyCursorPinned,
+                          committed: host.dataset.omeetyCursorCommitted || null,
+                          cursorHidden: Boolean(core?.coreService?.isCursorHidden),
                           synchronized: Boolean(core?.coreService?.decPrivateModes?.synchronizedOutput),
-                          working: text.includes('Working') && text.includes('esc to interrupt'),
+                          working: text.includes('esc to interrupt') ||
+                            (text.includes('Bash(') && text.includes('ACTIVE_CURSOR_TICK')),
                         });
                         if (now - started < duration) requestAnimationFrame(frame);
                         else resolve(out);
@@ -219,6 +246,7 @@ def main():
                 summary = {
                     'totalFrames': len(samples),
                     'workingMarkerFrames': len(marker_frames),
+                    'cursorHiddenFrames': sum(1 for sample in samples if sample['cursorHidden']),
                     'uniqueRenderedPositions': len(rendered),
                     'uniqueBufferPositions': len(buffers),
                     'uniqueCommittedPositions': len(committed),
@@ -230,12 +258,16 @@ def main():
                     ],
                     'pageErrors': errors,
                 }
-                print('ACTIVE_CODEX=' + json.dumps(summary, ensure_ascii=False))
+                print('ACTIVE_AGENT=' + json.dumps({'agent': TEST_AGENT, 'shell': TEST_SHELL, **summary}, ensure_ascii=False))
                 assert len(active) >= 120, summary
                 # Repeated command output legitimately pushes the empty composer down. The
                 # regression is horizontal movement to temporary Working/status line ends;
                 # throughout this probe the real empty-composer column is x=2.
-                assert {position[0] for position in rendered} == {2}, summary
+                # Codex keeps a visible caret on the empty composer; Claude Code
+                # intentionally hides it while a tool is active. If an Agent makes
+                # the cursor visible, it must stay on the real input column.
+                if rendered:
+                    assert {position[0] for position in rendered} == {2}, summary
                 assert len(summary['rapidTransitions']) <= 1, summary
                 assert all(
                     change['committed'] == f"{change['rendered'][0]},{change['rendered'][1]}"

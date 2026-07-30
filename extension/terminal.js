@@ -37,22 +37,30 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
   //   B. 重绘类：含绝对寻址/大跳的 CSI → 事务期间把"呈现层"钉在已提交坐标，
   //      直到输出静默才把当时位置提交为新的稳定坐标——一次布局完成后光标最多移动一次。
   // 静默窗口分两档：用户刚输入过（500ms 内）用 32ms（>1 帧、打字跟手无感，覆盖
-  // Codex 里"按键→TUI 重绘输入行"的链路）；纯后台输出用 150ms（相邻重绘块间隔通常 <100ms，
-  // 跨块中间坐标到不了提交线）。
+  // Codex 里"按键→TUI 重绘输入行"的链路）；纯后台输出自适应：如果列没有离开已提交的
+  // 输入列，只是输出增长令输入行纵向下移，沿用 150ms；如果列也改变（典型是运行时间、
+  // token 或状态栏/光影动画的临时落点），使用 500ms。窄侧栏会让这些行换行，新版 Codex
+  // 的同一轮重绘分块实测可相隔约 180ms；旧 150ms 阈值会把横向中间坐标误提交并画出来。
+  // 500ms 只作用于无用户输入的疑似跨区跳转，用户键入仍走 32ms 快速通道。
   // 钉住只发生在呈现层（同步 swap，见下），真实 buffer 从不被改写。
   const CURSOR_SETTLE_INTERACTIVE_MS = 32  // 交互模式（用户刚输入）。codex 一次按键的回显会拆成多段 output（多段 CUP 重绘输入行/状态栏），
   // cgArmSettle 每段都会 clearTimeout+重设定时器——只要 settle 时长 > 单次按键所有 chunk 的到达跨度，
   // 多段就被串进同一个 pin 窗口、只在输出真正静默后提交一次"最终坐标"，cursor 最多旧位→新位移动一次。
   // ❌ 曾误改成 0：每段各自的 setTimeout(0) 在下一段到达前就 fire 并 commit 该段的中间坐标，
   // cursor 在每个中间坐标上都渲染一帧 = 输入/回退时"频闪几下"。32ms 覆盖典型按键（codex chunk 间隔 <10ms）。
-  const CURSOR_SETTLE_IDLE_MS = 150       // 后台输出：150ms，codex 多块重绘的中间坐标到不了提交线
-  const cgSettleDelay = () => (performance.now() < interactiveUntil ? CURSOR_SETTLE_INTERACTIVE_MS : CURSOR_SETTLE_IDLE_MS)
+  const CURSOR_SETTLE_IDLE_SAME_COLUMN_MS = 150 // 输入列不变：允许输入框随新增内容纵向移动
+  const CURSOR_SETTLE_IDLE_RELOCATE_MS = 500    // 输入列改变：覆盖跨块重绘与运行态光影动画
   let cgCommittedX = term.buffer.active.cursorX
   let cgCommittedY = term.buffer.active.cursorY
   let cgSettleTimer = 0 // 非 0 = 有重绘事务未决（钉住中）
   let cgWritesInFlight = 0
   let cgUnsafeChunk = false // 当前 write 块是否含重绘类光标移动
   const cgBuffer = () => term?._core?._bufferService?.buffer
+  const cgSettleDelay = () => {
+    if (performance.now() < interactiveUntil) return CURSOR_SETTLE_INTERACTIVE_MS
+    const b = cgBuffer()
+    return b && b.x === cgCommittedX ? CURSOR_SETTLE_IDLE_SAME_COLUMN_MS : CURSOR_SETTLE_IDLE_RELOCATE_MS
+  }
   const isSynchronizedOutput = () => Boolean(term?._core?.coreService?.decPrivateModes?.synchronizedOutput)
   // 钉住条件：有未决重绘（settle 计时中）/ 有写入在解析 / 处于 synchronized output 事务
   const cgPinned = () => cgSettleTimer !== 0 || cgWritesInFlight > 0 || isSynchronizedOutput()
@@ -93,6 +101,12 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
       // drops the old cursor and commits the final one in the same frame.
       if (previousX !== committedX || previousY !== committedY) refreshCursorRows(previousY, committedY)
     })
+  }
+  function cgCommitNow() {
+    if (cgSettleTimer) clearTimeout(cgSettleTimer)
+    cgSettleTimer = 0
+    hostEl.dataset.omeetyCursorPinned = "false"
+    cgCommit()
   }
   function cgArmSettle(ms) {
     if (cgSettleTimer) clearTimeout(cgSettleTimer)
@@ -708,8 +722,14 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
       // committed=final，下一帧渲染直接画最终位——不再 pin 在旧坐标干等 settle → 输入/回退跟手、无滞后。
       // （合并写入是前提：单次 write 的 parse 同步进行、cursor 一次性落到最终位，无中间坐标可提交。）
       // 后台输出（codex 思考中的多块重绘）仍走 settle 批量提交，避免后台重绘中间坐标跳动。
-      if (performance.now() < interactiveUntil || !cgUnsafeChunk) {
-        cgCommit()
+      // 一旦前一块已经开启 settle，后续纯文本只有回到已提交的输入列时才能结束事务；
+      // 停在其他列说明它仍可能是运行时间/token/状态动画的文字块，必须继续钉住。
+      const interactive = performance.now() < interactiveUntil
+      const b = cgBuffer()
+      const safeTextAtInputColumn = !cgUnsafeChunk && b && b.x === cgCommittedX && !isSynchronizedOutput()
+      const ordinaryText = !cgUnsafeChunk && cgSettleTimer === 0 && !isSynchronizedOutput()
+      if (interactive || safeTextAtInputColumn || ordinaryText) {
+        cgCommitNow()
       } else {
         cgArmSettle(cgSettleDelay())
       }
