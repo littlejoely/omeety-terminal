@@ -32,6 +32,7 @@ _pwtest/*
 !_pwtest/test_browser_semantic_regressions.py
 !_pwtest/test_settings_reconnect.py
 !_pwtest/test_tab_render_budget.py
+!_pwtest/test_tab_width_stability.py
 !_pwtest/test_paste_protocol.py
 !_pwtest/test_context_bundle.py
 !_pwtest/test_performance_baseline.py
