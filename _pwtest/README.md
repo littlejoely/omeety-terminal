@@ -13,6 +13,8 @@ the scripts from this directory with Python and Playwright installed.
   atomic PTY restart, the restored settings icon, and custom-shell persistence.
 - `test_tab_render_budget.py` is a headless six-tab regression that verifies
   inactive terminals release WebGL and rapid switching keeps exactly one GPU renderer.
+- `test_tab_width_stability.py` verifies a tab becomes visible only after its renderer
+  and scrollbar metrics settle, so terminal content does not shrink after switching.
 - `test_paste_protocol.py` is a headless macOS/terminal paste regression that verifies
   Cmd+V and right-click deliver long content once as one bracketed-paste event.
 - `test_context_bundle.py` verifies Context Bundle v1, real Shadow DOM and

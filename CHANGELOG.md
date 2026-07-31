@@ -8,6 +8,11 @@ Omeety Terminal 的重要公开变更记录在此处。
 
 ### Fixed / 修复
 
+- Switch terminal tabs only after the target renderer and scrollbar metrics have
+  settled off-screen, preventing the terminal content from briefly filling the panel
+  and then shrinking a few pixels.
+- 切换终端 Tab 时，先在后台完成目标终端的渲染器恢复与滚动条尺寸计算，再一次性显示，
+  避免终端内容先铺满侧栏、随后横向收缩几个像素。
 - Keep the visible terminal cursor on the real input column while narrow Agent TUI
   layouts (including Codex and Claude Code) redraw elapsed time, token usage, the composer, and status animations;
   vertical composer movement stays responsive and typed input retains its fast path.

@@ -25,7 +25,6 @@ let sessionsResolved = false
 let sessionsFallbackTimer = null
 const sessionMetaTimers = new Map()
 let rendererSwitchTimer = null
-let terminalFocusFrame = 0
 let tabScrollFrame = 0
 
 function setStatus(state, text) {
@@ -185,29 +184,27 @@ function setActive(sid) {
     return
   }
   activeSid = sid
-  for (const [s, t] of tabs) {
-    const active = s === sid
-    t.hostEl.classList.toggle("active", active)
-  }
   const t = tabs.get(sid)
-  if (terminalFocusFrame) cancelAnimationFrame(terminalFocusFrame)
-  terminalFocusFrame = requestAnimationFrame(() => {
-    terminalFocusFrame = 0
-    if (activeSid !== sid) return
-    t.term?.resize()
-    t.term?.focus()
-  })
 
   // WebGL addon teardown/setup can synchronously block Chromium's main thread.
-  // Keep the click path DOM-only, then coalesce rapid switches and hand the one
-  // GPU renderer to the tab the user actually settled on.
+  // Keep the click path DOM-only and coalesce rapid switches. The outgoing tab
+  // stays visible while the target restores its renderer and fits off-screen;
+  // only then do we swap visibility. This prevents xterm's short-lived DOM
+  // width (before the scrollbar/WebGL metrics settle) from flashing full-width
+  // and shrinking a few pixels after every tab switch.
   clearTimeout(rendererSwitchTimer)
   rendererSwitchTimer = setTimeout(() => {
     rendererSwitchTimer = null
     if (activeSid !== sid || !tabs.has(sid)) return
     for (const [candidateSid, candidate] of tabs) {
-      candidate.term?.setActive?.(candidateSid === sid)
+      if (candidateSid !== sid) candidate.term?.setActive?.(false)
     }
+    t.term?.setActive?.(true)
+    t.term?.resize()
+    for (const [candidateSid, candidate] of tabs) {
+      candidate.hostEl.classList.toggle("active", candidateSid === sid)
+    }
+    t.term?.focus()
   }, 48)
   renderTabs()
 }
