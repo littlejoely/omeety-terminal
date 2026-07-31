@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Omeety Terminal macOS 安装器：安装 host 依赖、注册 Chrome Native Messaging、配置 Agent MCP。
+# Omeety Terminal macOS 安装器：准备 host 依赖、注册 Chrome/Edge/Chromium Native Messaging、配置 Agent MCP。
 
 set -eu
 
@@ -94,7 +94,7 @@ step "配置 Claude / Codex / Kimi 的 MCP"
 print ""
 print -P "%F{green}安装完成。%f"
 print "下一步："
-print "  1) 打开 chrome://extensions 并启用开发者模式"
+print "  1) Chrome/Chromium 打开 chrome://extensions；Edge 打开 edge://extensions，并启用开发者模式"
 print "  2) 加载已解压的扩展：${project_root}/extension"
 print "  3) 确认扩展 ID：${extension_id}"
 print "  4) 点击扩展图标打开侧栏，默认使用系统 zsh"

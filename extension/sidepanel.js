@@ -600,7 +600,7 @@ function renderToolsList(tools) {
   el.textContent = ""
   const byName = new Map(tools.map((t) => [t.name, t]))
   const sum = document.querySelector("#toolsDetails > summary")
-  if (sum) sum.textContent = `已注册的浏览器工具（${tools.length} 个）`
+  if (sum) sum.textContent = `已注册工具（${tools.length} 个）`
   const used = new Set()
   for (const cat of TOOL_CATEGORIES) {
     const items = cat.names.map((n) => byName.get(n)).filter(Boolean)

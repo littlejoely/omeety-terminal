@@ -1,8 +1,10 @@
 # Headed browser regression probes
 
-These Playwright probes launch a real Microsoft Edge profile and exercise the
-extension through Native Messaging and ConPTY. Install the host first, then run
-the scripts from this directory with Python and Playwright installed.
+These regression probes use isolated Microsoft Edge or Chromium profiles and
+exercise the extension, Native Messaging, Windows ConPTY, and macOS terminal
+paths as appropriate. Most probes require Python + Playwright; the Browser Core
+v2 probe is a Node `.mjs` script. Install the host first, then follow the
+requirements of the individual script.
 
 - `test_cursor_sync_rows.py` simulates Codex synchronized-output frames.
 - `test_cursor_active_codex.py` samples the cursor while a real Codex command is
@@ -35,5 +37,5 @@ the scripts from this directory with Python and Playwright installed.
   through the real extension/Native Messaging/ConPTY/MCP path. Its deterministic
   demo client is `launch_demo_agent.mjs`; no model account or network is needed.
 
-Persistent Edge profiles, screenshots, and logs produced by these probes are
+Persistent browser profiles, screenshots, and logs produced by these probes are
 intentionally ignored because they may contain account or page data.

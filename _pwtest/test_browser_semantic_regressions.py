@@ -91,7 +91,7 @@ def main():
             context = playwright.chromium.launch_persistent_context(
                 profile.name,
                 headless=True,
-                **({"channel": "msedge"} if sys.platform == "win32" else {}),
+                **({"channel": "msedge"} if sys.platform == "win32" else {"channel": "chromium"}),
                 args=[
                     f"--disable-extensions-except={EXTENSION}",
                     f"--load-extension={EXTENSION}",
