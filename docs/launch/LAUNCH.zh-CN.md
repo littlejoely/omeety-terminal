@@ -27,15 +27,18 @@
 
 当前公开 Beta 包含：
 
-- Windows ConPTY 真实终端与多终端标签页；
+- Windows ConPTY / macOS Unix PTY 真实终端与多终端标签页；
 - 侧栏关闭后的会话保活与近期输出回放；
-- 32 个 MCP 浏览器工具；
+- 41 个 MCP 工具（38 个浏览器工具 + 3 个本地下载工具）；
+- Browser Core v2：锁定标签页、同源失效 UID 恢复、跨 Frame 深度观察、动作后验证和脱敏审计；
 - 页面快照、稳定元素 UID、元素选取、截图、Console、跨导航等待；
 - CDP 真实输入、文件上传和可回滚页面预览；
+- 持久化下载、断点续传、代理择路和 SHA-256 校验；
 - Codex、Claude Code、Kimi Code 配置自动写入；
 - Streamable HTTP `/mcp`，兼容旧 SSE `/sse`。
 
-目前主要在 Windows 11 + Edge 验证，仍是早期版本。欢迎试用、提交 Issue，或者
+当前已在 Windows 11 + Microsoft Edge 和 macOS + Google Chrome 验证，仍是 Beta。
+欢迎试用、提交 Issue，或者
 围绕浏览器遥测、输入可靠性和更多平台做二次开发。如果它对你有用，也欢迎给个 Star。
 
 GitHub：https://github.com/littlejoely/omeety-terminal
@@ -44,13 +47,14 @@ GitHub：https://github.com/littlejoely/omeety-terminal
 
 开源了 Omeety Terminal：Edge/Chrome 侧栏里的真实本地终端，也是 Codex、
 Claude Code、Kimi Code 等 CLI Agent 的浏览器外骨骼。不同 Agent 共用当前网页的
-同一双眼睛和手，32 个 MCP 工具，本地桥接，MIT 开源。目前支持 Windows 与 macOS Chrome。
+同一双眼睛和手，41 个 MCP 工具，Browser Core v2，本地桥接，MIT 开源。目前支持
+Windows 与 macOS Chrome。
 
 https://github.com/littlejoely/omeety-terminal
 
 ## 首次发布检查
 
 - 发布时附上动态 GIF，而不是只贴仓库链接。
-- 明确写“Windows Beta”，避免用户误以为已经跨平台验证。
+- 明确写“Windows 11 + Edge、macOS + Chrome 已验证”，不要扩大到尚未真机回归的平台。
 - 发布后优先回答安装失败和安全边界问题。
 - 不复制粘贴同一段内容刷屏；根据社区规则调整标题与长度。

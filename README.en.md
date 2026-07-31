@@ -185,7 +185,7 @@ tools for any detected Claude Code, Codex CLI, and Kimi Code installations.
 
 ## Full installation details
 
-### macOS (Chrome)
+### macOS (Chrome / Edge / Chromium)
 
 ```bash
 # Run from the repository root in macOS Terminal or iTerm
@@ -205,7 +205,9 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 
 The installer:
 
-1. Installs host dependencies (`node-pty`, the MCP SDK, Express, and undici).
+1. Prepares host dependencies (`node-pty`, the MCP SDK, Express, and undici),
+   reusing bundled offline modules when present and running `npm install` only
+   when a dependency is missing.
 2. Generates `host/host-manifest.json`. Windows registers it under HKCU;
    macOS installs it in each detected browser's user-level
    `NativeMessagingHosts` directory. Neither path needs administrator access.
@@ -297,7 +299,9 @@ need migration.
 Deep observation merges DOMSnapshot, Accessibility Tree, and frame topology
 from the main document and out-of-process iframes. When a rerender invalidates
 an old `uN`, the composite locator recovers by role, label, text, attributes,
-parent, and geometry; ambiguous matches fail closed.
+parent, and geometry; ambiguous matches fail closed. Recovery is scoped by tab,
+document epoch, origin, and document ID, so cross-document references are rejected
+before dispatch.
 
 Observation defaults to a compact snapshot without duplicated long CSS paths.
 Semantic queries promote text leaves to their nearest clickable ancestor. Action
@@ -312,7 +316,7 @@ they cannot capture the foreground tab by mistake.
 context plus cropped image), `omeety_get_page_snapshot` (stable UIDs and
 incremental updates), `omeety_get_selected_context`,
 `omeety_capture_visible_tab`, `omeety_fetch_with_cookie`,
-`omeety_get_user_pick`, `omeety_get_user_picks`, `omeety_list_tabs`,
+`omeety_get_user_picks`, `omeety_list_tabs`,
 `omeety_get_console_logs`, and `omeety_get_runtime_metrics`.
 
 **Operate:** `omeety_act_and_verify` (action plus postcondition transaction),
@@ -407,12 +411,12 @@ extension from the browser's extension management page afterward.
 
 ```text
 extension/    MV3 extension: terminal, Native Messaging port, and content tools
-host/         Native Messaging host: PTY + Streamable HTTP MCP + legacy SSE
+host/         Native Messaging host: PTY + Browser Core + downloads + MCP
 installer/    Windows PowerShell and macOS zsh install/uninstall scripts
 shared/       Protocol documentation
 tools/        gen-key.js for a fixed extension key and ID
-_test/        Browser-free mock-native smoke tests
-_pwtest/      Headed Edge regression probes safe for public reproduction
+_test/        Browser-free deterministic tests and Native Messaging smoke tests
+_pwtest/      Isolated Edge, Chromium, and macOS real-browser regression probes
 ```
 
 Run the supported development regression suite from `host`:

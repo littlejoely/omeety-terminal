@@ -11,7 +11,7 @@ local browser-control layer.
 
 Please include / 请提供：
 
-- Windows and browser version / Windows 与浏览器版本；
+- operating system and browser version / 操作系统与浏览器版本；
 - Omeety commit or release / Omeety 提交或版本；
 - selected shell and CLI agent / 使用的 Shell 与 CLI Agent；
 - exact reproduction steps / 最短复现步骤；
@@ -40,6 +40,15 @@ Set-Location host
 npm ci
 Set-Location ..
 powershell -ExecutionPolicy Bypass -File installer\install.ps1
+```
+
+```bash
+# macOS
+git clone https://github.com/littlejoely/omeety-terminal.git
+cd omeety-terminal/host
+npm ci
+cd ..
+./installer/install.sh
 ```
 
 Load `extension` as an unpacked extension, then reload it after changing
@@ -82,7 +91,8 @@ success, failure, interruption, and timeout. Do not register it as a persistent
 冒烟测试内置 30 秒硬超时，并在成功、失败、中断和超时时清理 Host/PTY；不要把它
 注册成常驻 `launchctl` 或 Windows 计划任务。
 
-Headed Edge probes use isolated profiles and ports. See
+Real-browser probes use isolated Edge/Chromium profiles and ports; some macOS
+terminal probes are headless. See
 [`_pwtest/README.md`](_pwtest/README.md). The settings reconnect regression is:
 
 ```powershell

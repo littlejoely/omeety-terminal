@@ -13,6 +13,12 @@ Omeety Terminal 的重要公开变更记录在此处。
   and then shrinking a few pixels.
 - 切换终端 Tab 时，先在后台完成目标终端的渲染器恢复与滚动条尺寸计算，再一次性显示，
   避免终端内容先铺满侧栏、随后横向收缩几个像素。
+- Reject stale UID actions before dispatch when the remembered tab, document
+  epoch, origin, or document ID no longer matches the current page.
+- Verify normalized `contenteditable` text, expose icon-only SVG semantics, and
+  support target-level selected/class/text postconditions for SPA workflows.
+- 在派发动作前校验旧 UID 的标签页、文档代次、origin 与 document ID，阻止跨页面误点击。
+- 修复 `contenteditable` 验证假失败，补充纯图标控件语义与 SPA 目标级状态校验。
 - Keep the visible terminal cursor on the real input column while narrow Agent TUI
   layouts (including Codex and Claude Code) redraw elapsed time, token usage, the composer, and status animations;
   vertical composer movement stays responsive and typed input retains its fast path.

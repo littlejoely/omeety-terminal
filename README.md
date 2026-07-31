@@ -149,7 +149,7 @@ npm run package:release
 
 ## 完整安装说明
 
-### macOS（Chrome）
+### macOS（Chrome / Edge / Chromium）
 
 ```bash
 # 请在 macOS 自带 Terminal / iTerm 中，从项目根目录执行
@@ -167,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 ```
 
 安装器会：
-1. 给 host 装 npm 依赖（`node-pty` / MCP SDK / express / undici）。
+1. 准备 host 依赖（`node-pty` / MCP SDK / express / undici）；离线包已有依赖时直接复用，缺失时才运行 `npm install`。
 2. 生成 `host/host-manifest.json`；Windows 注册到 HKCU，macOS 安装到浏览器用户级 `NativeMessagingHosts` 目录，均不需要管理员权限。
 3. 把 MCP（`http://127.0.0.1:49171/mcp`）写进 `claude`、`codex`、`kimi` 的配置（先备份成 `*.bak-时间戳`）。
 
@@ -232,7 +232,8 @@ Code、Kimi Code 等 Agent 自动使用同一套工具契约。
 
 深度观察会合并主文档与跨进程 iframe 的 DOMSnapshot、Accessibility Tree 和 Frame
 拓扑。页面重渲染导致旧 `uN` 失效时，复合定位器会按角色、标签、文本、属性、父节点与
-位置重新定位；歧义结果不会盲点。
+位置重新定位；歧义结果不会盲点。恢复范围由标签页、文档代次、origin 和 document ID
+共同限定，跨文档的旧 UID 会在动作派发前被拒绝。
 
 默认观察使用 compact 快照，去掉重复的长 CSS 路径；查询会把命中的纯文本自动提升到
 最近的可点击父容器。动作结果区分 `dispatched`（事件已发出）、`applied`（后置条件成立）
@@ -242,7 +243,7 @@ Code、Kimi Code 等 Agent 自动使用同一套工具契约。
 
 ### 浏览器底层工具（31 个）
 
-**查看 / 获取**：`omeety_get_context_bundle`（结构化元素上下文 + 局部截图）、`omeety_get_page_snapshot`（稳定 uid + 增量快照）、`omeety_get_selected_context`、`omeety_capture_visible_tab`、`omeety_fetch_with_cookie`、`omeety_get_user_pick`、`omeety_get_user_picks`（连续选取的 `pick-1…N`）、`omeety_list_tabs`、`omeety_get_console_logs`、`omeety_get_runtime_metrics`。
+**查看 / 获取**：`omeety_get_context_bundle`（结构化元素上下文 + 局部截图）、`omeety_get_page_snapshot`（稳定 uid + 增量快照）、`omeety_get_selected_context`、`omeety_capture_visible_tab`、`omeety_fetch_with_cookie`、`omeety_get_user_picks`（连续选取的 `pick-1…N`）、`omeety_list_tabs`、`omeety_get_console_logs`、`omeety_get_runtime_metrics`。
 
 **操作**：`omeety_act_and_verify`（动作 + 后置条件验证事务）、`omeety_click`、`omeety_click_text`、`omeety_click_at`、`omeety_fill`、`omeety_type_text`、`omeety_press_key`、`omeety_select`、`omeety_scroll`、`omeety_hover`、`omeety_upload_file`、`omeety_open_tab`、`omeety_switch_tab`、`omeety_navigate`、`omeety_reload`、`omeety_go_back`、`omeety_close_tab`、`omeety_wait_for`、`omeety_execute_js`、`omeety_apply_preview_patch`、`omeety_rollback_preview_patch`、`omeety_request_user_confirmation`。
 
@@ -310,12 +311,12 @@ powershell -ExecutionPolicy Bypass -File installer\uninstall.ps1
 
 ```
 extension/    MV3 扩展（终端 + native 端口 + content 工具）
-host/         native messaging host（PTY + MCP Streamable HTTP，兼容 legacy SSE）
+host/         native messaging host（PTY + Browser Core + 下载 + MCP）
 installer/    Windows PowerShell 与 macOS zsh 安装/卸载脚本
 shared/       协议说明
 tools/        gen-key.js（生成扩展 key + 固定 ID）
-_test/        mock-native 冒烟测试（无需浏览器）
-_pwtest/      有头 Edge 回归探针（仅提交可公开复现脚本）
+_test/        无浏览器确定性测试与 Native Messaging 冒烟测试
+_pwtest/      隔离的 Edge / Chromium / macOS 真实浏览器回归探针
 ```
 
 开发回归统一从 `host` 目录运行：
