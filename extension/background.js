@@ -802,6 +802,7 @@ async function handleToolCall({ id, name, args }) {
   // 导致任何失败的工具调用连 tool_result 都发不出去，agent 端只能干等 60s 超时。
   let tab = null
   const toolStarted = performance.now()
+  broadcast({ type: "tool_activity", phase: "start", name })
   try {
     // 工具可显式锁定 tabId。Agent 执行长事务时，即使用户切到其他页面，
     // 后续步骤仍作用于原标签页，不再误等待/误点新的活动页。
@@ -934,6 +935,7 @@ async function handleToolCall({ id, name, args }) {
     }
     recordToolMetric(name, isSemanticToolSuccess(r), Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: !!r?.ok, result: r?.result, error: r?.error })
+    broadcast({ type: "tool_activity", phase: "end", name })
   } catch (e) {
     // CDP 状态自愈：若错误是 debugger 脱钩（tab 崩溃/用户手动取消调试/SW 重启后状态脏），
     // 清掉该 tab 的 attach 记录，下次调用重新 attach，而不是永远报 "Another debugger is already attached"。
@@ -944,6 +946,7 @@ async function handleToolCall({ id, name, args }) {
     }
     recordToolMetric(name, false, Math.round((performance.now() - toolStarted) * 10) / 10)
     sendNative({ type: "tool_result", id, ok: false, error: m })
+    broadcast({ type: "tool_activity", phase: "end", name })
   }
 }
 

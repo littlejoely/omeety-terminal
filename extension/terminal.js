@@ -7,13 +7,27 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
   const normalizeScrollback = (value) => Math.max(1000, Math.min(50000, Math.round(Number(value) || 5000)))
   const term = new window.Terminal({
     cursorBlink: false, // 关闭光标闪烁——codex/TUI 会发 ?12h 启用闪烁，下面 writeBatch 里每次都追加 ?12l 强制覆盖
-    fontFamily: "Cascadia Mono, Consolas, 'Microsoft YaHei', monospace",
+    fontFamily: "Cascadia Mono, Cascadia Code, 'JetBrains Mono', 'Fira Code', Consolas, Menlo, 'SF Mono', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans Mono CJK SC', monospace",
     fontSize,
+    lineHeight: 1.1, // CJK 行高略放宽，避免 TUI 网格错位
     scrollback: normalizeScrollback(initialScrollback),
     smoothScrollDuration: 0,
     scrollSensitivity: 3, // 滚轮滚动幅度（默认 1 偏慢；3 更跟手、少滚轮圈数）
     fastScrollSensitivity: 8, // 按住 Alt + 滚轮时大幅翻页
     fastScrollModifier: "alt",
+    // 配色与 chrome 统一（teal 暗色），替代 xterm 默认 VGA 调色板——默认蓝(#000ee)在纯黑上几乎不可读。
+    theme: {
+      background: "#0c0c0c",
+      foreground: "#e5e7eb",
+      cursor: "#e5e7eb",
+      cursorAccent: "#0c0c0c",
+      selectionBackground: "rgba(255,255,255,0.20)",
+      black: "#1e1e1e", red: "#ef4444", green: "#22c55e", yellow: "#eab308",
+      blue: "#3b82f6", magenta: "#a855f7", cyan: "#06b6d4", white: "#d1d5db",
+      brightBlack: "#6b7280", brightRed: "#f87171", brightGreen: "#4ade80",
+      brightYellow: "#facc15", brightBlue: "#60a5fa", brightMagenta: "#c084fc",
+      brightCyan: "#22d3ee", brightWhite: "#f9fafb",
+    },
   })
   const fit = new window.FitAddon()
   term.loadAddon(fit)
@@ -406,8 +420,22 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
   // 所有入口统一交给 xterm 的 paste()：它会按终端当前的 2004 模式生成一个完整的
   // bracketed-paste 事件，并统一换行。Codex 只有收到 Paste 事件，才会把超过阈值的长文本
   // 折叠成 [Pasted Content … chars]；直接向 PTY 写普通文本虽然内容相同，却会被当成逐字输入。
+  // 大段粘贴防 paste-jacking：>2000 字或 >5 行时，先闪红色警告，要求 3s 内再按一次 Ctrl+V 才真粘。
+  // bracketed-paste 取决于运行程序是否启用，raw shell 里多行含 \n 会立即执行（curl|sh 风险）。
+  let pendingPasteConfirm = null
   const sendPaste = (t) => {
     if (!t) return
+    const lineCount = t.split("\n").length
+    if (t.length > 2000 || lineCount > 5) {
+      if (pendingPasteConfirm && pendingPasteConfirm.text === t && Date.now() < pendingPasteConfirm.expires) {
+        pendingPasteConfirm = null
+        term.paste(t)
+        return
+      }
+      pendingPasteConfirm = { text: t, expires: Date.now() + 3000 }
+      flashPasteWarn(lineCount, t.length)
+      return
+    }
     term.paste(t)
   }
   const clipWrite = (t) => {
@@ -438,6 +466,21 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
     copiedBadge.classList.add("show")
     clearTimeout(flashCopied._t)
     flashCopied._t = setTimeout(() => copiedBadge.classList.remove("show"), 1000)
+  }
+  // 大段粘贴警告：红色 badge（复用 copied 样式换红底），提示"再按一次 Ctrl+V 确认"
+  let pasteWarnBadge = null
+  function flashPasteWarn(lines, chars) {
+    if (!pasteWarnBadge) {
+      pasteWarnBadge = document.createElement("div")
+      pasteWarnBadge.className = "omeety-copied-badge"
+      pasteWarnBadge.style.background = "#ef4444"
+      pasteWarnBadge.style.maxWidth = "82%"
+      hostEl.appendChild(pasteWarnBadge)
+    }
+    pasteWarnBadge.textContent = `大段粘贴 ${lines} 行 / ${chars} 字，可能被立即执行——再按一次 Ctrl+V 确认`
+    pasteWarnBadge.classList.add("show")
+    clearTimeout(flashPasteWarn._t)
+    flashPasteWarn._t = setTimeout(() => pasteWarnBadge.classList.remove("show"), 3000)
   }
 
   // ---- 终端内搜索条（Ctrl+F）----
@@ -515,29 +558,9 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
   //     否则 _handleAnyTextareaChanges 与 _inputEvent 会双发同一个字符。
   //   · 光标稳定器的 textarea 重定位经验证不影响 IME 交付。
   //   => 最稳的就是 return false（=最初的守卫）。之前 return true / 手动调 _handleAnyTextareaChanges 都会双发。
-  // 若你的 IME 仍打不出中文标点，多半是它对这些键不发 229——按一次 Shift+"，把控制台 [omeety-ime] 那行发我。
-  const IME_PUNCT_CODES = new Set(["Quote", "BracketLeft", "BracketRight", "Backslash", "Semicolon"])
-  // 诊断：标点键 keydown 后开 500ms 窗口，捕获后续 composition/input 事件，拼成一行打印
-  const _diagTa = term.element?.querySelector(".xterm-helper-textarea")
-  let _diagArmed = false
-  const _diagSeq = []
-  if (_diagTa) {
-    _diagTa.addEventListener("compositionstart", () => { if (_diagArmed) _diagSeq.push("compositionstart") })
-    _diagTa.addEventListener("compositionupdate", (ev) => { if (_diagArmed) _diagSeq.push("compositionupdate:" + JSON.stringify(ev.data)) })
-    _diagTa.addEventListener("compositionend", (ev) => { if (_diagArmed) _diagSeq.push("compositionend:" + JSON.stringify(ev.data)) })
-    _diagTa.addEventListener("input", (ev) => { if (_diagArmed) _diagSeq.push("input:data=" + JSON.stringify(ev.data) + " type=" + ev.inputType + " composed=" + ev.composed) })
-  }
-
+  // 若你的 IME 仍打不出中文标点，多半是它对这些键不发 229（已知无法在 xterm 层面统一兼容）。
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true
-
-    // 诊断：标点键签名 + 后续事件序列
-    if (!e.ctrlKey && !e.altKey && !e.metaKey && IME_PUNCT_CODES.has(e.code)) {
-      _diagSeq.length = 0
-      _diagArmed = true
-      _diagSeq.push("keydown:code=" + e.code + " keyCode=" + e.keyCode + " isComposing=" + e.isComposing + " key=" + JSON.stringify(e.key))
-      setTimeout(() => { _diagArmed = false; console.log("[omeety-ime]", _diagSeq.join(" | ")) }, 500)
-    }
 
     if (e.isComposing || e.keyCode === 229) return false
 
@@ -631,6 +654,20 @@ export function initTerminal({ hostEl, send, fontSize: initialFontSize, scrollba
         dispatchCtrlJ("keydown")
         dispatchCtrlJ("keyup")
       }, 0)
+      return false
+    }
+
+    // Ctrl+Shift+K / Cmd+K：清屏（term.clear 保留 scrollback，只清视口；对 TUI 也有效。
+    // Ctrl+L 不拦截——默认发 ^L 交 shell 处理，保留 bash/readline 的清屏+重绘肌肉记忆）
+    if (((e.ctrlKey && e.shiftKey) || e.metaKey) && !e.altKey && e.code === "KeyK") {
+      e.preventDefault()
+      term.clear()
+      return false
+    }
+    // Ctrl+Shift+A：全选整屏输出，方便复制
+    if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA") {
+      e.preventDefault()
+      term.selectAll()
       return false
     }
 
