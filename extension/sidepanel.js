@@ -27,9 +27,37 @@ const sessionMetaTimers = new Map()
 let rendererSwitchTimer = null
 let tabScrollFrame = 0
 
+// 状态行分层（复用现有 status-row，不新增显示区域）：
+//   base 连接态（持久）/ flash 瞬时反馈（TTL 后回 base）/ activity agent 工具活动指示
+const statusLayers = { base: { state: "", text: "连接中…" }, flash: null }
+function renderStatus() {
+  const layer = statusLayers.activity || statusLayers.flash || statusLayers.base
+  statusDot.className = "dot " + (layer.state || "")
+  statusText.textContent = layer.text
+}
 function setStatus(state, text) {
-  statusDot.className = "dot " + (state || "")
-  statusText.textContent = text
+  statusLayers.base = { state, text }
+  if (statusLayers.flash) return // 瞬时消息未到期，不被连接态覆盖
+  renderStatus()
+}
+function flashStatus(text, ttl = 3500) {
+  clearTimeout(flashStatus._t)
+  statusLayers.flash = { state: "ok", text }
+  renderStatus()
+  flashStatus._t = setTimeout(() => { statusLayers.flash = null; renderStatus() }, ttl)
+}
+// agent 工具活动指示：慢工具执行时 dot 脉动(busy) + "正在执行…"，让用户知道 agent 在忙。
+// 独立于 base/flash 层；start 延迟 300ms 才显示——快工具(list_tabs/switch_tab 毫秒级)不闪。
+let activityTimer = null
+let activeCount = 0
+function scheduleActivity(text) {
+  clearTimeout(activityTimer)
+  activityTimer = setTimeout(() => { statusLayers.activity = { state: "busy", text }; renderStatus() }, 300)
+}
+function clearActivity() {
+  clearTimeout(activityTimer)
+  statusLayers.activity = null
+  renderStatus()
 }
 
 function showView(name) {
@@ -233,10 +261,73 @@ function closeTab(sid) {
   setStatus("ok", "已连接") // 关闭后状态回到正常，不留"已退出"提示
 }
 
+// shell 退出（非主动关闭）后，在死终端上覆盖一层提示 + [重新打开][关闭]，避免用户继续敲键到尸体
+function showExitedOverlay(sid) {
+  const t = tabs.get(sid)
+  if (!t || !t.hostEl || t._exitedOverlay) return
+  const overlay = document.createElement("div")
+  overlay.className = "exited-overlay"
+  const msg = document.createElement("div")
+  msg.className = "exited-msg"
+  msg.textContent = "shell 已退出"
+  const reopen = document.createElement("button")
+  reopen.textContent = "重新打开"
+  reopen.className = "primary"
+  reopen.onclick = () => {
+    overlay.remove()
+    t._exitedOverlay = null
+    send({ type: "restart", sid, shell: t.shell || resolvedShell(), cols: curSettings.cols, rows: curSettings.rows })
+  }
+  const close = document.createElement("button")
+  close.textContent = "关闭 tab"
+  close.onclick = () => closeTab(sid)
+  overlay.append(msg, reopen, close)
+  t.hostEl.appendChild(overlay)
+  t._exitedOverlay = overlay
+}
+
 // tab 右键菜单：重命名 + codex 标点兼容开关（per-tab）
 let ctxMenuEl = null
 function closeTabMenu() {
   if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null }
+}
+// 内联重命名 tab 标题（双击标题或右键菜单触发）：contenteditable，Enter 提交 / Esc 取消 / blur 提交。
+// 替代原来的 window.prompt 原生对话框。
+function startRename(sid) {
+  const t = tabs.get(sid)
+  if (!t || !t.titleEl) return
+  const el = t.titleEl
+  el.contentEditable = "true"
+  el.focus()
+  const sel = window.getSelection?.()
+  if (sel) {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    sel.removeAllRanges()
+    sel.addRange(range)
+  }
+  const finish = (cancel) => {
+    el.contentEditable = "false"
+    el.removeEventListener("blur", onBlur)
+    el.removeEventListener("keydown", onKey)
+    if (cancel) { el.textContent = t.title; return }
+    const name = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 30)
+    if (name && name !== t.title) {
+      t.title = name
+      t.renamed = true
+      renderTabs()
+      persistTabMeta(sid)
+    } else {
+      el.textContent = t.title
+    }
+  }
+  const onBlur = () => finish(false)
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(false) }
+    else if (e.key === "Escape") { e.preventDefault(); finish(true) }
+  }
+  el.addEventListener("blur", onBlur)
+  el.addEventListener("keydown", onKey)
 }
 function openTabMenu(x, y, sid) {
   closeTabMenu()
@@ -246,16 +337,7 @@ function openTabMenu(x, y, sid) {
   m.className = "tab-ctx"
   const rn = document.createElement("button")
   rn.textContent = "重命名…"
-  rn.onclick = () => {
-    closeTabMenu()
-    const name = window.prompt("重命名终端：", t.title)
-    if (name && name.trim()) {
-      t.title = name.trim().slice(0, 30)
-      t.renamed = true
-      renderTabs()
-      persistTabMeta(sid)
-    }
-  }
+  rn.onclick = () => { closeTabMenu(); startRename(sid) }
   const pc = document.createElement("button")
   pc.className = "ctx-toggle" + (t.punctCompat ? " on" : "")
   pc.textContent = (t.punctCompat ? "✓ " : "") + "codex 标点兼容"
@@ -264,7 +346,7 @@ function openTabMenu(x, y, sid) {
     t.punctCompat = !t.punctCompat
     t.term?.setPunctCompat?.(t.punctCompat)
     persistTabMeta(sid)
-    setStatus("ok", t.punctCompat ? `「${t.title}」已开启 codex 标点兼容` : `「${t.title}」已关闭标点兼容`)
+    flashStatus(t.punctCompat ? `「${t.title}」已开启 codex 标点兼容` : `「${t.title}」已关闭标点兼容`)
     closeTabMenu()
   }
   m.append(rn, pc)
@@ -285,17 +367,31 @@ function ensureTabElement(sid, t) {
   const el = document.createElement("div")
   el.className = "tab"
   el.dataset.sid = sid
+  el.setAttribute("role", "tab")
+  el.tabIndex = 0
+  el.setAttribute("aria-selected", "false")
   const title = document.createElement("span")
   title.className = "tab-title"
+  title.title = "双击重命名"
+  title.addEventListener("dblclick", () => startRename(sid))
   const close = document.createElement("span")
   close.className = "tab-close"
   close.textContent = "×"
+  close.setAttribute("role", "button")
+  close.tabIndex = 0
+  close.setAttribute("aria-label", "关闭终端")
   close.title = "关闭"
   close.addEventListener("click", (e) => {
     e.stopPropagation()
     closeTab(sid)
   })
+  close.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); closeTab(sid) }
+  })
   el.addEventListener("click", () => setActive(sid))
+  el.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && e.target === el) { e.preventDefault(); setActive(sid) }
+  })
   el.addEventListener("auxclick", (e) => {
     if (e.button === 1) {
       e.preventDefault()
@@ -318,8 +414,10 @@ function renderTabs() {
   for (const [sid, t] of tabs) {
     const el = ensureTabElement(sid, t)
     liveElements.add(el)
-    el.classList.toggle("active", sid === activeSid)
-    el.title = `${t.title}（点击切换；中键关闭；右键重命名）`
+    const isActive = sid === activeSid
+    el.classList.toggle("active", isActive)
+    el.setAttribute("aria-selected", isActive ? "true" : "false")
+    el.title = `${t.title}（点击切换；中键关闭；右键重命名；双击标题重命名）`
     t.titleEl.textContent = t.title
     if (el.parentElement !== tabsEl) tabsEl.appendChild(el)
     if (sid === activeSid) activeEl = el
@@ -405,6 +503,7 @@ function connectPanel() {
           closingSids.delete(sid) // 主动关闭的 tab：不弹提示
         } else {
           setStatus("err", `tab ${sid} 的 shell 已退出`)
+          showExitedOverlay(sid) // 覆盖死终端，避免继续敲键到尸体
         }
       } else if (msg.state === "mcp_error") {
         setStatus("err", msg.msg || "MCP 错误")
@@ -418,13 +517,21 @@ function connectPanel() {
       const picks = Array.isArray(msg.picks) ? msg.picks : msg.pick ? [msg.pick] : []
       if (picks.length) {
         injectPickedContext(picks)
-        setStatus("ok", `已选取 ${picks.length} 个元素，并写入当前终端输入框`)
+        flashStatus(`已选取 ${picks.length} 个元素，并写入当前终端输入框`)
       } else {
-        setStatus("ok", msg.cancelled ? "选取已取消" : "没有选取元素")
+        flashStatus(msg.cancelled ? "选取已取消" : "没有选取元素")
       }
       const pb = $("pickBtn")
       pb.textContent = "选取"
       pb.classList.remove("danger") // 选取结束（选中/Esc取消/点取消）都恢复非红态
+    } else if (msg?.type === "tool_activity") {
+      if (msg.phase === "start") {
+        activeCount++
+        if (activeCount === 1) scheduleActivity(`正在执行 ${String(msg.name || "").replace(/^omeety_/, "")}…`)
+      } else {
+        activeCount = Math.max(0, activeCount - 1)
+        if (activeCount === 0) clearActivity()
+      }
     } else if (msg?.type === "tools_list") {
       renderToolsList(msg.tools || [])
     } else if (msg?.type === "active_tab_changed") {
@@ -434,7 +541,7 @@ function connectPanel() {
         pick.classList.remove("danger")
         pick.textContent = "选取"
         const t = msg.title ? `「${String(msg.title).slice(0, 20)}」` : "新标签页"
-        setStatus("ok", `已切换到${t}；选取按页面独立，本页需要时点「选取」`)
+        flashStatus(`已切换到${t}；选取按页面独立，本页需要时点「选取」`)
       }
     }
   })
@@ -488,7 +595,7 @@ function applyAckGate() {
   let resizeTimer = null
   new ResizeObserver(() => {
     clearTimeout(resizeTimer)
-    resizeTimer = setTimeout(() => tabs.get(activeSid)?.term?.resize(), 100)
+    resizeTimer = setTimeout(() => tabs.get(activeSid)?.term?.resize(), 160)
   }).observe(terminalHost)
 
   connectPanel()
@@ -507,8 +614,8 @@ $("pickBtn").addEventListener("click", () => {
   const entering = !btn.classList.contains("danger") // danger = 选取中
   btn.textContent = entering ? "完成选取" : "选取"
   btn.classList.toggle("danger", entering)
-  if (entering) setStatus("ok", "连续选取：到网页点多个元素；Enter/本按钮完成，Esc 取消")
-  else setStatus("ok", "正在完成选取…")
+  if (entering) flashStatus("连续选取：到网页点多个元素；Enter/本按钮完成，Esc 取消")
+  else flashStatus("正在完成选取…")
 })
 
 $("tabNew").addEventListener("click", () => newTab())
@@ -559,7 +666,7 @@ $("saveBtn").addEventListener("click", async () => {
     send({ type: "settings_changed" })
     setSettingsOpen(false)
     if (previousShell !== shell) restartTerminals(shell)
-    else setStatus("ok", "设置已保存")
+    else flashStatus("设置已保存")
   } catch (error) {
     setStatus("err", `保存失败：${error?.message || error}`)
   } finally {
