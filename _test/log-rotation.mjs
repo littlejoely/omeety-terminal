@@ -10,8 +10,9 @@ process.env.OMEETY_LOG_MAX_BYTES = "1024"
 process.env.OMEETY_LOG_BACKUPS = "2"
 
 try {
-  const { log } = await import(`../host/src/log.js?rotation-test=${Date.now()}`)
+  const { flushLogs, log } = await import(`../host/src/log.js?rotation-test=${Date.now()}`)
   for (let index = 0; index < 120; index += 1) log("rotation-test", index, "x".repeat(80))
+  await flushLogs()
 
   const files = fs.readdirSync(dir).sort()
   assert.deepEqual(files, ["host-debug.log", "host-debug.log.1", "host-debug.log.2"])
