@@ -284,23 +284,18 @@ async function getPageSnapshot(args = {}) {
     capturedAt: new Date().toISOString(),
   }
   if (includeElements) {
-    snapshot.forms = queryAllDeep("form").slice(0, 20).map(describeForm)
-    snapshot.buttons = queryAllDeep("button,input[type=button],input[type=submit],a")
-      .filter(isVisible)
-      .slice(0, 100)
-      .map(describeClickable)
-    snapshot.inputs = queryAllDeep("input,textarea,select,[contenteditable=true]")
-      .filter(isVisible)
-      .slice(0, 120)
-      .map(describeInput)
-    snapshot.links = queryAllDeep("a[href]")
-      .filter(isVisible)
-      .slice(0, 80)
-      .map(describeClickable)
-    snapshot.tables = queryAllDeep("table")
-      .filter(isVisible)
-      .slice(0, 20)
-      .map(describeTable)
+    // 一次遍历 shadow/iframe roots，对 5 个 selector 各查（替代 5 次 queryAllDeep 各自遍历找 shadow hosts）
+    const SEL_FORM = "form"
+    const SEL_BUTTON = "button,input[type=button],input[type=submit],a"
+    const SEL_INPUT = "input,textarea,select,[contenteditable=true]"
+    const SEL_LINK = "a[href]"
+    const SEL_TABLE = "table"
+    const batch = queryAllDeepBatch([SEL_FORM, SEL_BUTTON, SEL_INPUT, SEL_LINK, SEL_TABLE])
+    snapshot.forms = batch[SEL_FORM].slice(0, 20).map(describeForm)
+    snapshot.buttons = batch[SEL_BUTTON].filter(isVisible).slice(0, 100).map(describeClickable)
+    snapshot.inputs = batch[SEL_INPUT].filter(isVisible).slice(0, 120).map(describeInput)
+    snapshot.links = batch[SEL_LINK].filter(isVisible).slice(0, 80).map(describeClickable)
+    snapshot.tables = batch[SEL_TABLE].filter(isVisible).slice(0, 20).map(describeTable)
   }
   // 可交互元素 + 稳定 uid（每次快照重新打标）。agent 拿 uid 去调 click/fill/type，比猜动态 selector 稳。
   // 默认 120 与 tools.meta.js 的 maxInteractive default 对齐（之前这里写 60 导致大列表被砍）。
@@ -309,7 +304,12 @@ async function getPageSnapshot(args = {}) {
 }
 
 function finalizePageSnapshot(snapshot, args, started) {
-  const digestSource = JSON.stringify({ ...snapshot, capturedAt: undefined })
+  // digest 只算稳定字段（url + interactive 的 uid/role/text），排除 scroll/selection/visibleText/metrics 等易变项。
+  // 否则页面没变、只是滚动了一下，snapshotId 就变 → sinceSnapshotId 的 unchanged 快路径永不命中、增量形同虚设。
+  const digestSource = JSON.stringify({
+    url: snapshot.url,
+    interactive: (snapshot.interactive || []).map((i) => `${i.uid}|${i.role || ""}|${(i.text || "").slice(0, 40)}`),
+  })
   snapshot.snapshotId = `snap-${fnv1a(digestSource)}`
   snapshot.metrics = {
     buildMs: Math.round((performance.now() - started) * 10) / 10,
@@ -451,6 +451,54 @@ function queryAllDeep(selector, root = document, acc = [], depth = 0) {
     /* ignore */
   }
   return acc
+}
+
+// 一次收集所有可查询的 root（document + 所有 shadowRoot + 同源 iframe contentDocument）。
+// queryAllDeepBatch 用：避免每个 selector 都重新遍历 querySelectorAll("*") 找 shadow hosts。
+function collectRoots(root = document, acc = [], depth = 0) {
+  if (depth > 15 || acc.length >= 200) return acc
+  acc.push(root)
+  try {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) collectRoots(el.shadowRoot, acc, depth + 1)
+      if (acc.length >= 200) break
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    for (const frame of root.querySelectorAll("iframe,frame")) {
+      if (acc.length >= 200) break
+      try {
+        if (frame.contentDocument) collectRoots(frame.contentDocument, acc, depth + 1)
+      } catch {
+        /* cross-origin */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return acc
+}
+
+// 批量查询：一次遍历 shadow/iframe roots，对多个 selector 各查，
+// 避免每个 selector 都重复遍历 querySelectorAll("*") 找 shadow hosts（snapshot 抓多类元素时 5 次遍历 → 1 次）。
+function queryAllDeepBatch(selectors, root = document) {
+  const roots = collectRoots(root)
+  const result = {}
+  for (const sel of selectors) result[sel] = []
+  for (const r of roots) {
+    for (const sel of selectors) {
+      try {
+        for (const el of r.querySelectorAll(sel)) {
+          if (result[sel].length < 5000) result[sel].push(el)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return result
 }
 
 // uid 在"同一元素对象存活期间"稳定：WeakMap 以元素为键，只要元素没被 SPA 重渲染替换，多次快照拿到同一个 uid。
@@ -1343,13 +1391,17 @@ async function waitFor(args) {
 
 // 悬停：展开 hover 才出现的菜单/提示（合成 pointerover/mouseover/mousemove 序列）。
 // 菜单展开后通常需要重新 get_page_snapshot 拿到新出现的项再点。
-function hoverElement(args) {
+async function hoverElement(args) {
   const element = resolveTargetElement(args)
   if (!element) throw new Error("hover 需要 uid/selector/x,y，且目标元素存在")
   element.scrollIntoView({ block: "center", inline: "center" })
   const r = element.getBoundingClientRect()
   const x = Number.isFinite(Number(args.x)) ? Number(args.x) : r.x + r.width / 2
   const y = Number.isFinite(Number(args.y)) ? Number(args.y) : r.y + r.height / 2
+
+  // hover 前快照可见交互元素签名，用于 diff 出 hover 后浮现的菜单/子项（学 BrowserSkill conditionalSurfaceProbe）
+  const before = collectInteractiveSignatures()
+
   const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window }
   for (const type of ["pointerover", "pointermove", "mouseover", "mousemove"]) {
     try {
@@ -1362,7 +1414,46 @@ function hoverElement(args) {
       /* ignore */
     }
   }
-  return { hovered: true, x: Math.round(x), y: Math.round(y), element: describeElement(element) }
+
+  // settle 等 CSS transition / JS 渲染出 hover 才显示的菜单/提示
+  await new Promise((resolve) => setTimeout(resolve, 220))
+
+  // hover 后 diff：新出现的交互元素 = hover 浮现的菜单/子项，直接返回给 agent（省一次 get_page_snapshot）
+  const after = collectInteractiveSignatures()
+  const beforeSet = new Set(before.map((s) => s.sig))
+  const revealed = after.filter((s) => !beforeSet.has(s.sig)).slice(0, 20)
+
+  return {
+    hovered: true,
+    x: Math.round(x),
+    y: Math.round(y),
+    element: describeElement(element),
+    revealedCount: revealed.length,
+    revealed,
+  }
+}
+
+// 收集当前可见可交互元素的签名（tag+bbox+文本），供 hover 前后 diff 出浮现项。
+// 返回带 center 坐标，让 agent 拿到 revealed 后能直接 omeety_click_at(center)，不用再 get_page_snapshot。
+function collectInteractiveSignatures() {
+  return queryAllDeep(INTERACTIVE_SELECTOR)
+    .filter(isVisible)
+    .slice(0, 300)
+    .map((el) => {
+      const br = el.getBoundingClientRect()
+      const text = (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 40)
+      return {
+        sig: `${el.tagName}|${Math.round(br.x)},${Math.round(br.y)},${Math.round(br.width)}x${Math.round(br.height)}|${text}`,
+        tag: el.tagName,
+        role: el.getAttribute("role") || "",
+        text,
+        bbox: { x: Math.round(br.x), y: Math.round(br.y), width: Math.round(br.width), height: Math.round(br.height) },
+        center: { x: Math.round(br.x + br.width / 2), y: Math.round(br.y + br.height / 2) },
+      }
+    })
 }
 
 function resolveTargetElement(args = {}) {

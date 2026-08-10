@@ -6,6 +6,20 @@ Omeety Terminal 的重要公开变更记录在此处。
 
 ## [Unreleased]
 
+### Added / 新增
+
+- `omeety_hover` now auto-detects menus/tooltips that appear on hover: after dispatching hover events it waits ~220ms, diffs interactive elements before/after, and returns the newly-revealed items with center coordinates, so the agent can click them directly without an extra `get_page_snapshot`.
+- `omeety_navigate` accepts an optional `waitUntil: "load"`: when set, it polls `chrome.tabs.status` until `complete` (browser-native load detection, no CDP attach needed), so the agent can navigate and continue without a separate `wait_for`.
+- `omeety_hover` 自动探测 hover 才出现的菜单/提示：发完 hover 事件后等待约 220ms，对比前后可交互元素，把新浮现的项（带中心坐标）直接返回，agent 无需再额外 `get_page_snapshot`。
+- `omeety_navigate` 新增可选 `waitUntil: "load"`：传入则轮询 `chrome.tabs.status` 至 `complete`（浏览器原生 load 判定，无需 attach CDP），agent 导航后可直接继续，省一次 `wait_for`。
+
+### Performance / 性能
+
+- Snapshot element collection (`forms`/`buttons`/`inputs`/`links`/`tables`) now batches all selectors into a single shadow/iframe root traversal (`queryAllDeepBatch`), replacing five separate `querySelectorAll("*")` full-document walks — fewer repeated scans on shadow-DOM-heavy pages (Feishu/POM).
+- `sinceSnapshotId` digest now covers only stable fields (url + interactive uid/role/text), excluding scroll/selection/visibleText. Previously the digest changed on every scroll so the `unchanged` fast path never hit; now it actually returns `unchanged` when the page hasn't changed, saving a full snapshot round-trip.
+- 快照元素采集（`forms`/`buttons`/`inputs`/`links`/`tables`）改为一次遍历 shadow/iframe 根批量查询（`queryAllDeepBatch`），替代原先五次各自 `querySelectorAll("*")` —— 在飞书/POM 这类 shadow DOM 重的页面减少重复全文档扫描。
+- `sinceSnapshotId` 摘要改为只覆盖稳定字段（url + interactive 的 uid/role/text），排除 scroll/selection/visibleText。此前摘要随滚动就变，`unchanged` 快路径永不命中；现在页面没变时真能返回 `unchanged`，省一整次快照往返。
+
 ### Fixed / 修复
 
 - Switch terminal tabs only after the target renderer and scrollbar metrics have

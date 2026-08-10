@@ -865,7 +865,26 @@ async function handleToolCall({ id, name, args }) {
       const url = String(args.url || "")
       if (!/^https?:\/\//i.test(url)) throw new Error("navigate 需要 http(s) url")
       await chrome.tabs.update(tab.id, { url })
-      r = { ok: true, result: { navigating: true, tabId: tab.id, url, hint: "导航是异步的：用 omeety_wait_for 等目标元素/文本出现后再操作" } }
+      // 可选 waitUntil:'load'：传了就轮询 tab.status 到 complete（页面 load），不传保持异步（agent 自行 wait_for）。
+      // chrome.tabs.status=complete 是浏览器综合判断（含 load），比手动 CDP lifecycle 监听更稳，也不用 attach debugger。
+      const waitUntil = String(args.waitUntil || "").toLowerCase()
+      if (waitUntil === "load" || waitUntil === "complete") {
+        const navStarted = Date.now()
+        const navTimeout = Math.min(Math.max(Number(args.timeoutMs) || 15000, 1000), 60000)
+        let loaded = false
+        while (Date.now() - navStarted < navTimeout) {
+          await waitDelay(150)
+          try {
+            const t = await chrome.tabs.get(tab.id)
+            if (t && t.status === "complete") { loaded = true; break }
+          } catch {
+            /* tab 可能正在切换，继续等 */
+          }
+        }
+        r = { ok: true, result: { navigated: true, loaded, tabId: tab.id, url, hint: loaded ? "页面已 load，可继续操作" : "等待 load 超时，可能仍在加载，用 omeety_wait_for 等目标元素" } }
+      } else {
+        r = { ok: true, result: { navigating: true, tabId: tab.id, url, hint: "导航是异步的：用 omeety_wait_for 等目标元素/文本出现后再操作（或加 waitUntil:'load' 让 navigate 等到 load）" } }
+      }
     } else if (name === "omeety_reload") {
       const tid = Number(args.tabId) || tab?.id
       if (!tid) throw new Error("没有活动标签页")
