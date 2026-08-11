@@ -451,8 +451,22 @@ function restoreSessions(sessions) {
 }
 
 // ---------- native 桥 ----------
+// SW 重启/端口意外断开时自动重连（指数退避，封顶 8s），重连会重新 list_sessions + 上报本窗口，恢复绑定。
+let panelReconnectTimer = null
+let panelReconnectDelay = 500
+let expectPanelDisconnect = false // connectPanel 主动 disconnect 时置 true，避免触发重连
+function schedulePanelReconnect() {
+  if (panelReconnectTimer) return
+  panelReconnectTimer = setTimeout(() => {
+    panelReconnectTimer = null
+    connectPanel()
+  }, panelReconnectDelay)
+  panelReconnectDelay = Math.min(Math.round(panelReconnectDelay * 1.7), 8000)
+}
 function connectPanel() {
+  panelReconnectDelay = 500 // 每次连接尝试都重置退避基数
   if (panelPort) {
+    expectPanelDisconnect = true
     try {
       panelPort.disconnect()
     } catch {
@@ -547,7 +561,11 @@ function connectPanel() {
       renderWindowPin(msg)
     }
   })
-  panelPort.onDisconnect.addListener(() => setStatus("err", "与后台连接断开"))
+  panelPort.onDisconnect.addListener(() => {
+    if (expectPanelDisconnect) { expectPanelDisconnect = false; return } // connectPanel 主动断的，不重连
+    setStatus("err", "与后台连接断开，重连中…")
+    schedulePanelReconnect()
+  })
 
   // Host 是仍存活 PTY 的事实来源：先恢复全部会话；连接异常时 2.5s 后至少给用户一个新终端。
   send({ type: "list_sessions" })
@@ -569,15 +587,17 @@ function connectPanel() {
 }
 
 // ---------- 浏览器窗口绑定按钮（顶栏 status-row 右侧：自动/锁定/解除 三态）----------
-function renderWindowPin({ state, windowId }) {
+function renderWindowPin({ state, windowId, title }) {
   const btn = $("winPin")
   if (!btn) return
   btn.classList.toggle("locked", state === "locked")
+  const t = String(title || "").trim()
+  const label = t ? (t.length > 8 ? t.slice(0, 8) + "…" : t) : (windowId != null ? `窗口${windowId}` : "")
   if (state === "locked" || state === "auto") {
-    btn.textContent = `🔒 窗口${windowId}`
+    btn.textContent = `🔒 ${label || "本窗口"}`
     btn.title = state === "locked"
-      ? "已锁定到本窗口，点此解除（改回跟随焦点）"
-      : "自动绑定本窗口，点此锁定（不再随侧栏切换）"
+      ? `已锁定「${label || "本窗口"}」，点此解除（改回跟随焦点）`
+      : `自动绑定「${label || "本窗口"}」，点此锁定（不再随侧栏切换）`
   } else { // unpinned / 初始未上报
     btn.textContent = "🔓 跟焦点"
     btn.title = "已解除（跟随焦点），点此恢复自动绑定本窗口"

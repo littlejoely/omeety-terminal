@@ -12,8 +12,8 @@ Omeety Terminal 的重要公开变更记录在此处。
 - `omeety_navigate` accepts an optional `waitUntil: "load"`: when set, it polls `chrome.tabs.status` until `complete` (browser-native load detection, no CDP attach needed), so the agent can navigate and continue without a separate `wait_for`.
 - `omeety_hover` 自动探测 hover 才出现的菜单/提示：发完 hover 事件后等待约 220ms，对比前后可交互元素，把新浮现的项（带中心坐标）直接返回，agent 无需再额外 `get_page_snapshot`。
 - `omeety_navigate` 新增可选 `waitUntil: "load"`：传入则轮询 `chrome.tabs.status` 至 `complete`（浏览器原生 load 判定，无需 attach CDP），agent 导航后可直接继续，省一次 `wait_for`。
-- Omeety now binds all browser automation to the window its side panel opens in. Snapshots, navigation, clicks, `open_tab`, and the 选取 picker act only on that window; new pages open there too — work in another window is never disturbed. A status-row button (🔒 窗口N / 🔓 跟焦点) cycles auto-bind / lock / unbind. With no panel reporting a window it falls back to the old "follow focus" behavior, so it's fully backward-compatible.
-- omeety 现在把所有浏览器自动化（快照、导航、点击、`open_tab`、选取）绑定到侧栏所在窗口，新页面也只开到该窗口——你在另一个窗口的工作不受打扰。状态行右侧按钮（🔒 窗口N / 🔓 跟焦点）在「自动绑定 / 锁定 / 解除」间循环切换。没有任何侧栏上报窗口时回退到原来的「跟随焦点」行为，完全向后兼容。
+- Omeety now binds all browser automation to the window its side panel opens in. Snapshots, navigation, clicks, `open_tab`, and the 选取 picker act only on that window; new pages open there too — work in another window is never disturbed. A status-row button shows the bound window's active-tab title (e.g. 🔒 飞书, or 🔓 跟焦点) and cycles auto-bind / lock / unbind. The lock survives Service-Worker restarts (persisted to `chrome.storage`), and the side panel auto-reconnects with backoff if the SW restarts. With no panel reporting a window it falls back to the old "follow focus" behavior, so it's fully backward-compatible.
+- omeety 现在把所有浏览器自动化（快照、导航、点击、`open_tab`、选取）绑定到侧栏所在窗口，新页面也只开到该窗口——你在另一个窗口的工作不受打扰。状态行右侧按钮显示该窗口活动标签的标题（如 🔒 飞书，或 🔓 跟焦点），点击在「自动绑定 / 锁定 / 解除」间切换。锁定态持久化到 `chrome.storage`，Service Worker 重启不丢；侧栏检测到与后台断线会自动指数退避重连。没有任何侧栏上报窗口时回退到原来的「跟随焦点」行为，完全向后兼容。
 
 ### Performance / 性能
 
@@ -24,6 +24,8 @@ Omeety Terminal 的重要公开变更记录在此处。
 
 ### Fixed / 修复
 
+- When the bound window momentarily has no active tab (race during window close), `resolveToolTab` returns null instead of falling back to the last-focused window — refusing to touch the user's work window rather than risk operating it by mistake.
+- 绑定窗口瞬间无活动标签（关闭窗口的竞态）时，`resolveToolTab` 改为返回 null，不再回退到最后聚焦窗口——宁可报"没有活动标签"也不误操作用户的工作窗口。
 - Switch terminal tabs only after the target renderer and scrollbar metrics have
   settled off-screen, preventing the terminal content from briefly filling the panel
   and then shrinking a few pixels.
