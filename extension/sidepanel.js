@@ -464,7 +464,8 @@ function schedulePanelReconnect() {
   panelReconnectDelay = Math.min(Math.round(panelReconnectDelay * 1.7), 8000)
 }
 function connectPanel() {
-  panelReconnectDelay = 500 // 每次连接尝试都重置退避基数
+  // 不在此重置 panelReconnectDelay：重置要等「真连上」（收到 sessions_list）才做，否则反复失败时
+  // 退避会被每次尝试重置成 500，永远累加不到 8s（P7）。
   if (panelPort) {
     expectPanelDisconnect = true
     try {
@@ -476,6 +477,7 @@ function connectPanel() {
   panelPort = chrome.runtime.connect({ name: "panel" })
   panelPort.onMessage.addListener((msg) => {
     if (msg?.type === "sessions_list") {
+      panelReconnectDelay = 500 // 真连上了（native 经 background 回了会话清单）：重置退避基数
       restoreSessions(msg.sessions)
     } else if (msg?.type === "confirmation_request") {
       const detail = String(msg.detail || "")
