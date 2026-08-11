@@ -19,55 +19,14 @@ const panelConfirmations = new Map() // id -> { resolve, timer }，下载等 hos
 let lastPick = null // 最近一个选取（侧栏 pick_result 广播用；连续选取见 lastPickSet）
 let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
 
-// ---------- 浏览器窗口绑定（自动化专区）----------
-// omeety 自动绑定到「侧栏所在窗口」：所有自动化操作只作用该窗口，新页也只开到该窗口，
-// 不污染用户在另一个窗口的日常工作。panel 连上时用 chrome.windows.getCurrent() 上报自己所在 windowId。
-let autoWindowId = null    // panel 上报的本侧栏窗口（自动跟随最近连上的侧栏）
-let manualOverride = null  // null=用auto | number=锁定该窗口 | "none"=解除(强制跟焦点)
+// ---------- 浏览器窗口绑定 ----------
+// omeety 只在「侧栏所在窗口」干活：所有自动化操作只作用该窗口，新页也只开到该窗口，
+// 不碰用户在另一个窗口的日常工作。panel 连上时用 chrome.windows.getCurrent() 上报自己所在 windowId。
+// 无按钮、无手动切换——侧栏开在哪，omeety 就在哪干。
+let autoWindowId = null    // panel 上报的本侧栏窗口（最近连上的侧栏所在窗口）
 function effectiveWindowId() {
-  if (manualOverride === "none") return null               // 解除 → 跟焦点（=现状）
-  if (typeof manualOverride === "number") return manualOverride  // 锁定 → 固定该窗口
-  return autoWindowId                                       // 默认 → 自动绑定
+  return autoWindowId
 }
-function windowPinState() {
-  const wid = effectiveWindowId()
-  if (manualOverride === "none" || wid == null) return { state: "unpinned", windowId: null }
-  if (typeof manualOverride === "number") return { state: "locked", windowId: wid }
-  return { state: "auto", windowId: wid }
-}
-async function broadcastWindowPin() {
-  const state = windowPinState()
-  let title = ""
-  if (state.windowId != null) {
-    try {
-      const [t] = await chrome.tabs.query({ active: true, windowId: state.windowId })
-      title = (t?.title || "").trim() // 带上活动标签标题，面板按钮显示「🔒 飞书」而非无意义的窗口数字
-    } catch { /* ignore */ }
-  }
-  broadcast({ type: "window_pin", ...state, title })
-}
-
-// 持久化锁定态：SW 重启后恢复 manualOverride（autoWindowId 由 panel 重连重新上报，无需持久化）。
-const WINPIN_KEY = "winPinOverride"
-let manualOverrideReady // SW 启动 load 的 Promise；pin/unpin/auto await 它，避免被异步 load 覆盖（P1 竞态）
-async function loadManualOverride() {
-  try {
-    const r = await chrome.storage.local.get(WINPIN_KEY)
-    if (r[WINPIN_KEY] === "none") manualOverride = "none"
-    else manualOverride = null
-    // 锁定态（具体 windowId）不持久化：windowId 跨 Edge 会话不稳定，重启后可能被复用给别的窗口，
-    // 导致锁定串到错误窗口。只持久化"解除"意图（跨会话稳定）。锁定态重启降级 auto，重开侧栏自动
-    // 绑定当前窗口，等价于重新锁定且安全（P14）。
-  } catch { /* ignore */ }
-  if (panelPorts.size) void broadcastWindowPin() // 恢复后若有 panel 在线，刷新按钮
-}
-async function saveManualOverride() {
-  try {
-    if (manualOverride === "none") await chrome.storage.local.set({ [WINPIN_KEY]: "none" })
-    else await chrome.storage.local.remove(WINPIN_KEY) // 锁定(windowId)/auto(null) 都不持久化
-  } catch { /* ignore */ }
-}
-manualOverrideReady = loadManualOverride() // SW 启动：恢复"解除"意图
 
 const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
@@ -349,25 +308,9 @@ chrome.runtime.onConnect.addListener((port) => {
       browserCancelGeneration += 1
       broadcast({ type: "browser_cancelled", tabId: tab?.id || null })
     } else if (m?.type === "panel_window") {
-      // panel 用 chrome.windows.getCurrent() 上报自己所在窗口 → 自动绑定
+      // panel 用 chrome.windows.getCurrent() 上报自己所在窗口 → omeety 只在这窗口干活
       const pw = Number(m.windowId)
       if (Number.isInteger(pw) && pw > 0) autoWindowId = pw
-      broadcastWindowPin()
-    } else if (m?.type === "pin_window") {
-      await manualOverrideReady // 等 SW 启动时的 load 完成，避免被异步 load 覆盖（P1）
-      manualOverride = effectiveWindowId()  // 锁定当前生效窗口（不再随侧栏切换变化）
-      void saveManualOverride()
-      broadcastWindowPin()
-    } else if (m?.type === "unpin_window") {
-      await manualOverrideReady
-      manualOverride = "none"               // 解除：强制跟随焦点
-      void saveManualOverride()
-      broadcastWindowPin()
-    } else if (m?.type === "auto_window") {
-      await manualOverrideReady
-      manualOverride = null                 // 恢复自动绑定（跟随最近连上的侧栏）
-      void saveManualOverride()
-      broadcastWindowPin()
     } else if (m?.type === "replay_request") {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，
       // 否则会把别的 tab 的终端输出灌进当前 tab（跨 tab 串话）。
@@ -411,7 +354,6 @@ chrome.runtime.onConnect.addListener((port) => {
   })
   connectNative()
   void notifyPanelState(true)
-  broadcastWindowPin() // 新 panel 连上：下发当前窗口绑定态，让它立即渲染右侧按钮
 })
 
 function requestPanelConfirmation(args = {}) {
@@ -825,12 +767,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (cdpAttachedTabs.has(tabId)) void cdpDetachTab(tabId)
   emitBrowserEvent({ type: "tab.removed", tabId, at: Date.now() })
 })
-// 绑定的窗口被关 → 清理 autoWindowId/manualOverride（effectiveWindowId 随之变 null，工具报"没有活动标签"而非误碰别的窗口），并刷新面板按钮
+// 绑定的窗口被关 → 清掉 autoWindowId（工具报"没有活动标签"而非误碰别的窗口）
 chrome.windows.onRemoved.addListener((windowId) => {
-  let changed = false
-  if (autoWindowId === windowId) { autoWindowId = null; changed = true }
-  if (manualOverride === windowId) { manualOverride = null; changed = true; void saveManualOverride() } // 锁定的窗口被关：连 storage 一起清，避免重启恢复死 id
-  if (changed) broadcastWindowPin()
+  if (autoWindowId === windowId) autoWindowId = null
 })
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === "loading" || changeInfo.url) tabDocumentEpochs.set(tabId, (tabDocumentEpochs.get(tabId) || 0) + 1)
@@ -845,7 +784,6 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   chrome.tabs.get(activeInfo.tabId)
     .then((t) => broadcast({ type: "active_tab_changed", tabId: activeInfo.tabId, title: t?.title || "" }))
     .catch(() => broadcast({ type: "active_tab_changed", tabId: activeInfo.tabId, title: "" }))
-  if (activeInfo.windowId === effectiveWindowId()) void broadcastWindowPin() // 绑定窗口切了 active tab → 刷新按钮标题
 })
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return

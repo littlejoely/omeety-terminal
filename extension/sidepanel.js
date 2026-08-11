@@ -559,8 +559,6 @@ function connectPanel() {
         const t = msg.title ? `「${String(msg.title).slice(0, 20)}」` : "新标签页"
         flashStatus(`已切换到${t}；选取按页面独立，本页需要时点「选取」`)
       }
-    } else if (msg?.type === "window_pin") {
-      renderWindowPin(msg)
     }
   })
   panelPort.onDisconnect.addListener(() => {
@@ -586,33 +584,6 @@ function connectPanel() {
       setStatus("err", "会话清单响应超时，已创建新终端")
     }
   }, 2500)
-}
-
-// ---------- 浏览器窗口绑定按钮（顶栏 status-row 右侧：自动/锁定/解除 三态）----------
-function renderWindowPin({ state, windowId, title }) {
-  const btn = $("winPin")
-  if (!btn) return
-  btn.classList.toggle("locked", state === "locked")
-  const t = String(title || "").trim()
-  const label = t ? (t.length > 8 ? t.slice(0, 8) + "…" : t) : (windowId != null ? `窗口${windowId}` : "")
-  if (state === "locked" || state === "auto") {
-    btn.textContent = `🔒 ${label || "本窗口"}`
-    btn.title = state === "locked"
-      ? `已锁定「${label || "本窗口"}」，点此解除（改回跟随焦点）`
-      : `自动绑定「${label || "本窗口"}」，点此锁定（不再随侧栏切换）`
-  } else { // unpinned / 初始未上报
-    btn.textContent = "🔓 跟焦点"
-    btn.title = "已解除（跟随焦点），点此恢复自动绑定本窗口"
-  }
-  btn.dataset.state = state || "unpinned"
-}
-function cycleWindowPin() {
-  const btn = $("winPin")
-  const s = btn?.dataset.state
-  // auto → locked → unpinned → auto
-  if (s === "auto") send({ type: "pin_window" })
-  else if (s === "locked") send({ type: "unpin_window" })
-  else send({ type: "auto_window" }) // unpinned / 初始 → 恢复自动
 }
 
 function restartTerminals(shell) {
@@ -664,7 +635,6 @@ $("ackBtn").addEventListener("click", async () => {
   tabs.get(activeSid)?.term?.focus()
 })
 
-$("winPin")?.addEventListener("click", cycleWindowPin)
 $("pickBtn").addEventListener("click", () => {
   send({ type: "start_pick" }) // content 端 toggle：未选取→进入；选取中→完成
   const btn = $("pickBtn")
