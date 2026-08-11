@@ -42,6 +42,21 @@ body {
   flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; /* 第二行有整行空间，超长仍省略号、不换行 */
 }
+/* 窗口绑定按钮：落 status-row 最右（status-text flex:1 把它顶过去），不挤占省略号、不新增显示行 */
+.win-pin {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.win-pin:hover { background: rgba(255,255,255,0.08); color: var(--fg); }
+.win-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.win-pin.locked { color: #22c55e; } /* 锁定态绿字强调，和已连接绿点呼应 */
 button {
   font: inherit; cursor: pointer;
   border: 1px solid var(--border); background: var(--bg); color: var(--fg);

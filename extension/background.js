@@ -18,6 +18,27 @@ const panelPorts = new Set() // 面板通过 chrome.runtime.connect({name:"panel
 const panelConfirmations = new Map() // id -> { resolve, timer }，下载等 host 本地工具也能在侧栏确认
 let lastPick = null // 最近一个选取（侧栏 pick_result 广播用；连续选取见 lastPickSet）
 let lastPickSet = null // { tabId, picks[] }，供连续选取与 omeety_get_user_picks
+
+// ---------- 浏览器窗口绑定（自动化专区）----------
+// omeety 自动绑定到「侧栏所在窗口」：所有自动化操作只作用该窗口，新页也只开到该窗口，
+// 不污染用户在另一个窗口的日常工作。panel 连上时用 chrome.windows.getCurrent() 上报自己所在 windowId。
+let autoWindowId = null    // panel 上报的本侧栏窗口（自动跟随最近连上的侧栏）
+let manualOverride = null  // null=用auto | number=锁定该窗口 | "none"=解除(强制跟焦点)
+function effectiveWindowId() {
+  if (manualOverride === "none") return null               // 解除 → 跟焦点（=现状）
+  if (typeof manualOverride === "number") return manualOverride  // 锁定 → 固定该窗口
+  return autoWindowId                                       // 默认 → 自动绑定
+}
+function windowPinState() {
+  const wid = effectiveWindowId()
+  if (manualOverride === "none" || wid == null) return { state: "unpinned", windowId: null }
+  if (typeof manualOverride === "number") return { state: "locked", windowId: wid }
+  return { state: "auto", windowId: wid }
+}
+function broadcastWindowPin() {
+  broadcast({ type: "window_pin", ...windowPinState() })
+}
+
 const runtimeStartedAt = Date.now()
 const toolMetrics = new Map() // name -> {calls,successes,failures,totalMs,maxMs,lastMs,lastAt}
 let browserCancelGeneration = 0
@@ -291,9 +312,26 @@ chrome.runtime.onConnect.addListener((port) => {
     } else if (m?.type === "browser_status_request") {
       sendNative({ type: "browser_status_request", includeEvents: !!m.includeEvents })
     } else if (m?.type === "cancel_browser") {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      const cwid = effectiveWindowId()
+      const [tab] = cwid != null
+        ? [(await chrome.tabs.query({ active: true, windowId: cwid }))[0]]
+        : await chrome.tabs.query({ active: true, currentWindow: true })
       browserCancelGeneration += 1
       broadcast({ type: "browser_cancelled", tabId: tab?.id || null })
+    } else if (m?.type === "panel_window") {
+      // panel 用 chrome.windows.getCurrent() 上报自己所在窗口 → 自动绑定
+      const pw = Number(m.windowId)
+      if (Number.isInteger(pw) && pw > 0) autoWindowId = pw
+      broadcastWindowPin()
+    } else if (m?.type === "pin_window") {
+      manualOverride = effectiveWindowId()  // 锁定当前生效窗口（不再随侧栏切换变化）
+      broadcastWindowPin()
+    } else if (m?.type === "unpin_window") {
+      manualOverride = "none"               // 解除：强制跟随焦点
+      broadcastWindowPin()
+    } else if (m?.type === "auto_window") {
+      manualOverride = null                 // 恢复自动绑定（跟随最近连上的侧栏）
+      broadcastWindowPin()
     } else if (m?.type === "replay_request") {
       // 只回放同 sid 的记录；对不上（旧会话 sid 已变）就空——绝不 fallback 全量，
       // 否则会把别的 tab 的终端输出灌进当前 tab（跨 tab 串话）。
@@ -307,8 +345,11 @@ chrome.runtime.onConnect.addListener((port) => {
         }
       }
     } else if (m?.type === "start_pick") {
-      // 面板点了 📌 选取 → 让活动标签页进入选取模式
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      // 面板点了 📌 选取 → 让活动标签页进入选取模式（绑定到侧栏所在窗口，不串到工作窗口）
+      const pwid = effectiveWindowId()
+      const [tab] = pwid != null
+        ? [(await chrome.tabs.query({ active: true, windowId: pwid }))[0]]
+        : await chrome.tabs.query({ active: true, currentWindow: true })
       if (!tab?.id) return
       try {
         await chrome.tabs.sendMessage(tab.id, { type: "omeety_start_pick" })
@@ -334,6 +375,7 @@ chrome.runtime.onConnect.addListener((port) => {
   })
   connectNative()
   void notifyPanelState(true)
+  broadcastWindowPin() // 新 panel 连上：下发当前窗口绑定态，让它立即渲染右侧按钮
 })
 
 function requestPanelConfirmation(args = {}) {
@@ -747,6 +789,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (cdpAttachedTabs.has(tabId)) void cdpDetachTab(tabId)
   emitBrowserEvent({ type: "tab.removed", tabId, at: Date.now() })
 })
+// 绑定的窗口被关 → 清理 autoWindowId/manualOverride，回退 currentWindow（保持兼容），并刷新面板按钮
+chrome.windows.onRemoved.addListener((windowId) => {
+  let changed = false
+  if (autoWindowId === windowId) { autoWindowId = null; changed = true }
+  if (manualOverride === windowId) { manualOverride = null; changed = true }
+  if (changed) broadcastWindowPin()
+})
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === "loading" || changeInfo.url) tabDocumentEpochs.set(tabId, (tabDocumentEpochs.get(tabId) || 0) + 1)
   if (!changeInfo.status && !changeInfo.url && !changeInfo.title) return
@@ -784,6 +833,13 @@ async function resolveToolTab(args = {}) {
   const requestedTabId = Number(args?.tabId)
   if (Number.isInteger(requestedTabId) && requestedTabId > 0) {
     return await chrome.tabs.get(requestedTabId)
+  }
+  const wid = effectiveWindowId()
+  if (wid != null) {
+    // 绑定到侧栏所在窗口：只取该窗口的活动标签。绑定窗口恰好无活动 tab（被关/空）→ 回退 currentWindow，不卡死。
+    return (await chrome.tabs.query({ active: true, windowId: wid }))[0]
+        || (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
+        || null
   }
   return (await chrome.tabs.query({ active: true, currentWindow: true }))[0] || null
 }
@@ -852,13 +908,20 @@ async function handleToolCall({ id, name, args }) {
     } else if (name === "omeety_open_tab") {
       const url = String(args.url || "")
       if (!/^https?:\/\//i.test(url)) throw new Error("open_tab 需要 http(s) url")
-      const t = await chrome.tabs.create({ url, active: args.active !== false })
+      const createOpts = { url, active: args.active !== false }
+      const owid = effectiveWindowId()
+      if (owid != null) createOpts.windowId = owid // 强制开到绑定窗口，不污染用户的工作窗口
+      const t = await chrome.tabs.create(createOpts)
       r = { ok: true, result: { id: t.id, windowId: t.windowId, url: t.pendingUrl || t.url || url, title: t.title || "", active: t.active } }
     } else if (name === "omeety_switch_tab") {
       const tid = Number(args.tabId)
       if (!tid) throw new Error("switch_tab 需要 tabId")
       const t = await chrome.tabs.update(tid, { active: true })
-      try { await chrome.windows.update(t.windowId, { focused: true }) } catch { /* 窗口聚焦失败不致命 */ }
+      const swid = effectiveWindowId()
+      // 未绑定时维持原抢焦点行为；绑定后只在目标 tab 属于绑定窗口时才抢焦点，避免把工作窗口拉到前面。
+      if (swid == null || t.windowId === swid) {
+        try { await chrome.windows.update(t.windowId, { focused: true }) } catch { /* 窗口聚焦失败不致命 */ }
+      }
       r = { ok: true, result: { activated: true, tabId: tid, url: t.url, title: t.title } }
     } else if (name === "omeety_navigate") {
       if (!tab?.id) throw new Error("没有活动标签页")
