@@ -18,6 +18,19 @@ mcp_url="http://127.0.0.1:${mcp_port}/mcp"
 step() { print -P "%F{cyan}» $1%f" }
 ok() { print -P "%F{green}  ✓ $1%f" }
 
+clear_project_quarantine() {
+  # 从浏览器/聊天工具解压的源码目录可能携带 quarantine。若不清理，
+  # 后续通过真实 PTY 执行 npm/pip 时，新生成的原生依赖也会继承该标记，
+  # macOS 就会反复弹出安全审查。这里只处理 Omeety 自己的项目目录。
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "${project_root}" 2>/dev/null || true
+  fi
+}
+
+step "清理浏览器下载隔离标记"
+clear_project_quarantine
+ok "Omeety 项目目录已就绪"
+
 step "检查 Node.js"
 node_bin="$(command -v node 2>/dev/null || true)"
 npm_bin="$(command -v npm 2>/dev/null || true)"
@@ -41,6 +54,7 @@ for module_path in \
 done
 if [[ -n "${missing_module}" ]]; then
   (cd "${host_dir}" && "${npm_bin}" install --no-audit --no-fund)
+  clear_project_quarantine
   ok "依赖已安装"
 else
   ok "离线依赖已存在，跳过 npm install"

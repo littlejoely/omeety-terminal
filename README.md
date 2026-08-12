@@ -260,6 +260,12 @@ Canvas/受控表格的数字单元格可以先用 `click_at` 的 `clickCount:2` 
 
 ### 本地下载工具（3 个，MCP-first）
 
+安装开发依赖（`npm install`、`pip install`、`brew install` 等）应直接在
+Omeety 的真实 PTY 中运行，行为与系统 Terminal.app 相同，不经过下述下载确认。
+`omeety download` 只用于把任意 URL 的原始文件安全保存到下载目录，因此仍会要求
+一次明确确认。macOS 上安装器会清理 Omeety 项目目录继承的浏览器 quarantine，
+避免后续原生依赖反复触发系统安全审查。
+
 - `omeety_download_start`：确认后创建持久化任务；自动探测直连/代理、按服务器能力并发分块、重试与断点续传，可选 SHA-256 校验。
 - `omeety_download_status`：不传 `taskId` 时列出全部任务，传入后返回单个任务的进度、速度、ETA、线路与校验结果。
 - `omeety_download_cancel`：取消任务并保留分块文件；下载内容永不自动执行。

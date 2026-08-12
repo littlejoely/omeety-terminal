@@ -350,6 +350,14 @@ This compresses many model/tool round trips into one auditable call.
 
 ### Local download tools (3, MCP-first)
 
+Install development dependencies (`npm install`, `pip install`, `brew install`,
+and similar commands) directly in Omeety's real PTY. They behave like the same
+commands in Terminal.app and do not use the download confirmation flow below.
+`omeety download` is reserved for saving arbitrary raw URLs, so it intentionally
+keeps one explicit approval. On macOS the installer clears browser quarantine
+inherited by the Omeety project directory so native dependencies do not trigger
+repeated system security reviews.
+
 - `omeety_download_start` creates a persistent task after confirmation. It can
   probe direct and proxy routes, use concurrent byte ranges when supported,
   retry and resume partial segments, and verify an optional SHA-256 digest.
