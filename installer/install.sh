@@ -62,6 +62,50 @@ fi
 "${node_bin}" "${host_dir}/scripts/fix-node-pty-permissions.cjs"
 ok "node-pty / MCP SDK / Express / undici 已就绪"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  step "安装 PTY 守护（spawnd）"
+  # macOS 会给 Chrome 进程树下写出的网络文件打 com.apple.quarantine（责任进程归因），
+  # host 与其 PTY 子进程全部中招：brew/npm 下载的二进制会被 Gatekeeper 击杀。
+  # spawnd 由 launchd 拉起（launchd 责任链），PTY 内下载不再带标记，与 Terminal.app 一致。
+  spawnd_entry="${host_dir}/src/spawnd.js"
+  omeety_dir="${user_home}/.omeety"
+  spawnd_plist="${user_home}/Library/LaunchAgents/com.omeety.spawnd.plist"
+  mkdir -p "${omeety_dir}"
+  {
+    print '<?xml version="1.0" encoding="UTF-8"?>'
+    print '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    print '<plist version="1.0"><dict>'
+    print '  <key>Label</key><string>com.omeety.spawnd</string>'
+    printf '  <key>ProgramArguments</key><array><string>%s</string><string>%s</string></array>\n' "${node_bin}" "${spawnd_entry}"
+    print '  <key>RunAtLoad</key><true/>'
+    print '  <key>KeepAlive</key><true/>'
+    print '  <key>ProcessType</key><string>Interactive</string>'
+    print '</dict></plist>'
+  } > "${spawnd_plist}"
+  spawnd_label="com.omeety.spawnd"
+  if ! plutil -lint "${spawnd_plist}" >/dev/null 2>&1; then
+    print -u2 "spawnd plist 生成异常，跳过守护安装。终端仍可用（走进程内 PTY）。"
+  else
+    launchctl bootout "gui/$(id -u)/${spawnd_label}" 2>/dev/null || true
+    if ! launchctl bootstrap "gui/$(id -u)" "${spawnd_plist}"; then
+      print -u2 "spawnd bootstrap 失败（日志：${omeety_dir}/spawnd.log）。终端仍可用（走进程内 PTY）。"
+    else
+      launchctl kickstart -k "gui/$(id -u)/${spawnd_label}" 2>/dev/null || true
+      spawnd_sock="${omeety_dir}/spawnd.sock"
+      spawnd_up=0
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        [[ -S "${spawnd_sock}" ]] && { spawnd_up=1; break; }
+        sleep 0.5
+      done
+      if (( spawnd_up )); then
+        ok "spawnd 已运行（${spawnd_sock}）"
+      else
+        print -u2 "spawnd 未就绪（日志：${omeety_dir}/spawnd.log）。终端仍可用（走进程内 PTY）。"
+      fi
+    fi
+  fi
+fi
+
 step "生成 Native Messaging 启动脚本"
 {
   print '#!/bin/zsh'

@@ -358,6 +358,35 @@ keeps one explicit approval. On macOS the installer clears browser quarantine
 inherited by the Omeety project directory so native dependencies do not trigger
 repeated system security reviews.
 
+#### macOS responsibility attribution and the spawnd daemon
+
+The native host is launched by the browser, and macOS attributes every network
+file written by any process under Chrome's responsibility to Chrome itself —
+including files downloaded by `curl`/`brew`/`npm` inside the real PTY. The
+consequences: unsigned binaries extracted from those downloads (Homebrew's
+portable-ruby, for example) are `SIGKILL`ed by Gatekeeper on first exec,
+quarantine propagates on copy, double-fork orphaning does not clear the
+attribution, and `xattr -d` on fresh flags returns `EPERM` inside the Chrome
+responsibility chain.
+
+The fix: the installer registers `~/Library/LaunchAgents/com.omeety.spawnd.plist`
+so launchd runs the `host/src/spawnd.js` daemon (launchd responsibility — the
+same download comes back with **no quarantine flag**). The host handshakes with
+the daemon on boot and prefers spawning PTYs through it; if the daemon is missing
+or dies, it falls back to in-process spawning (identical to the old behavior,
+minus the quarantine fix). To verify:
+
+```zsh
+# Inside the Omeety PTY:
+curl -sS https://example.com -o /tmp/probe && xattr -l /tmp/probe   # expect: no com.apple.quarantine
+tail -n 5 ~/.omeety/spawnd.log                                       # daemon log
+```
+
+Troubleshooting: `launchctl print gui/$(id -u)/com.omeety.spawnd` shows daemon
+state, and `host-debug.log` lines `startPty via spawnd` / `via inline` tell you
+which path each terminal took. Re-run the installer after moving the project
+directory so the plist's absolute paths stay valid.
+
 - `omeety_download_start` creates a persistent task after confirmation. It can
   probe direct and proxy routes, use concurrent byte ranges when supported,
   retry and resume partial segments, and verify an optional SHA-256 digest.

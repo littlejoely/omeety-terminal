@@ -1,9 +1,13 @@
 // PTY：Windows 使用 ConPTY，macOS/Linux 使用系统 PTY，I/O 桥到 native 通道。
+// macOS 上优先经 spawnd 守护（launchd 责任链）spawn，避免 PTY 内下载的文件
+// 被 macOS 按 Chrome 责任进程打隔离标记；守护不可用时回退进程内 spawn。
 import pty from "node-pty"
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
 import { fileURLToPath } from "node:url"
+import { spawndReady, startPtyViaDaemon, initSpawndClient } from "./spawn-client.js"
+import { log } from "./log.js"
 
 const OMEETY_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "bin")
 
@@ -119,6 +123,19 @@ export function createPtyEnv(baseEnv = process.env) {
 }
 
 export function startPty({ shell, args, cols, rows, cwd, onOutput, onExit }) {
+  if (spawndReady()) {
+    try {
+      const env = createPtyEnv()
+      const api = startPtyViaDaemon({ shell, args, cols, rows, cwd, env, onOutput, onExit })
+      log("startPty via spawnd shell=" + shell)
+      return api
+    } catch (e) {
+      log("startPty spawnd FAILED, fallback inline", e?.stack || String(e))
+    }
+  } else {
+    // 未就绪（守护未装/未启动）：本次走进程内，同时后台重试握手（带冷却）。
+    initSpawndClient()
+  }
   const env = createPtyEnv()
   const options = {
     name: "xterm-256color",
@@ -132,6 +149,7 @@ export function startPty({ shell, args, cols, rows, cwd, onOutput, onExit }) {
   term.onData((d) => onOutput(d))
   term.onExit(({ exitCode }) => onExit(exitCode))
   return {
+    via: "inline",
     write: (s) => term.write(s),
     resize: (c, r) => {
       try {

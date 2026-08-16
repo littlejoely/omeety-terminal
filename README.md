@@ -266,6 +266,29 @@ Omeety 的真实 PTY 中运行，行为与系统 Terminal.app 相同，不经过
 一次明确确认。macOS 上安装器会清理 Omeety 项目目录继承的浏览器 quarantine，
 避免后续原生依赖反复触发系统安全审查。
 
+#### macOS 责任进程归因与 spawnd 守护
+
+native host 由浏览器拉起，macOS 会按「责任进程」把 Chrome 进程树下所有进程写出的
+网络文件打上 `com.apple.quarantine`（标记里直接写着 `Chrome`）——包括真实 PTY 里
+`curl`/`brew`/`npm` 下载的文件。后果：解包出的未公证二进制（如 Homebrew 的
+portable-ruby）首次执行即被 Gatekeeper `SIGKILL`；复制隔离文件会传染；双 fork
+孤儿化也洗不掉归因；在 Chrome 责任链内对新鲜标记 `xattr -d` 还会 `EPERM`。
+
+修复：安装器会注册 `~/Library/LaunchAgents/com.omeety.spawnd.plist`，由 launchd
+拉起 `host/src/spawnd.js` 守护（launchd 责任链，实测同一文件下载后**不再带隔离
+标记**）。host 启动时与守护握手，PTY 优先经守护 spawn；守护未安装或中途消失时
+自动回退进程内 spawn（行为与旧版一致，只是隔离标记问题会回来）。验证方式：
+
+```zsh
+# Omeety PTY 内：
+curl -sS https://example.com -o /tmp/probe && xattr -l /tmp/probe   # 期望：无 com.apple.quarantine
+tail -n 5 ~/.omeety/spawnd.log                                       # 守护日志
+```
+
+排查：`launchctl print gui/$(id -u)/com.omeety.spawnd` 看运行状态；`host-debug.log`
+里 `startPty via spawnd` / `via inline` 标明每个终端走的路径。项目目录搬迁后需重跑
+安装器刷新 plist 里的绝对路径。
+
 - `omeety_download_start`：确认后创建持久化任务；自动探测直连/代理、按服务器能力并发分块、重试与断点续传，可选 SHA-256 校验。
 - `omeety_download_status`：不传 `taskId` 时列出全部任务，传入后返回单个任务的进度、速度、ETA、线路与校验结果。
 - `omeety_download_cancel`：取消任务并保留分块文件；下载内容永不自动执行。

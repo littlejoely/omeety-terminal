@@ -2,6 +2,7 @@
 // 三件事：① native stdio（与扩展通信）② PTY（真实 shell）③ MCP HTTP（agent 连它用浏览器工具）。
 import { nmSend, startNmReader } from "./nm-stdio.js"
 import { startPty, resolveShell } from "./pty.js"
+import { warmSpawnd } from "./spawn-client.js"
 import { resolveResult } from "./relay.js"
 import { startMcpHttp } from "./mcp-server.js"
 import { TOOLS } from "./tools.meta.js"
@@ -66,6 +67,9 @@ log("boot", {
   stdinIsTTY: process.stdin.isTTY,
   stdoutIsTTY: process.stdout.isTTY,
 })
+
+// 尽早与 spawnd 握手（若已安装），让第一批 spawnShell 就能走守护。
+warmSpawnd()
 
 const { browserCore } = startMcpHttp({ port: MCP_PORT, nmSend })
 
