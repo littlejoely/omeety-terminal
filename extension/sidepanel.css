@@ -198,18 +198,24 @@ button:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); out
 .terminal-host .xterm .xterm-viewport {
   overflow: hidden; /* 实际滚动走自定义滚动条（下方），隐藏原生滚动条及其占位 */
 }
-/* 细圆角滚动条：这版 xterm 用 VS Code 风格的 .xterm-scrollable-element > .scrollbar（默认 14px），
-   不是原生 ::-webkit-scrollbar。改 .scrollbar 宽度 + .slider 圆角/配色，箭头隐藏更简洁。 */
-.terminal-host .xterm .xterm-scrollable-element > .scrollbar { width: 1px !important; right: 4px !important; }
-.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider {
+/* 细圆角滚动条：xterm 6.1 将 .scrollbar/.slider/.scra 重命名为
+   .xterm-scrollbar/.xterm-slider/.xterm-scra。两套选择器同时保留，避免以后
+   切换稳定版/预览版时再次回退成默认 14px 粗滚动条。 */
+.terminal-host .xterm .xterm-scrollable-element > :is(.scrollbar, .xterm-scrollbar) {
+  width: 1px !important;
+  right: 4px !important;
+}
+.terminal-host .xterm .xterm-scrollable-element > :is(.scrollbar, .xterm-scrollbar) > :is(.slider, .xterm-slider) {
   width: 1px !important;
   border-radius: 3px !important;
   background: rgba(255, 255, 255, 0.6) !important;
 }
-.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+.terminal-host .xterm .xterm-scrollable-element > :is(.scrollbar, .xterm-scrollbar) > :is(.slider, .xterm-slider):hover {
   background: rgba(255, 255, 255, 0.85) !important;
 }
-.terminal-host .xterm .xterm-scrollable-element > .scrollbar > .scra { display: none !important; }
+.terminal-host .xterm .xterm-scrollable-element > :is(.scrollbar, .xterm-scrollbar) > :is(.scra, .xterm-scra) {
+  display: none !important;
+}
 .ack-gate {
   position: absolute;
   inset: 0; /* 覆盖整个终端视图（含 tab 栏）；顶栏在其外，仍可点 */

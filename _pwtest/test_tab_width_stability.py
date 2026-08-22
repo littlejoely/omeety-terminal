@@ -72,7 +72,9 @@ def main():
                     const xterm = host?.querySelector('.xterm');
                     const viewport = host?.querySelector('.xterm-viewport');
                     const screen = host?.querySelector('.xterm-screen');
-                    const scrollbar = host?.querySelector('.xterm-scrollable-element > .scrollbar');
+                    const scrollbar = host?.querySelector(
+                      '.xterm-scrollable-element > :is(.scrollbar, .xterm-scrollbar)'
+                    );
                     const rect = (el) => el ? el.getBoundingClientRect() : { width: 0, right: 0, left: 0 };
                     return {
                       phase,
@@ -106,6 +108,7 @@ def main():
             assert samples[0]["visibleIndex"] == 1, samples
             assert samples[-1]["visibleIndex"] == 0, samples
             assert samples[-1]["focusedVisible"], samples
+            assert 0 < samples[-1]["scrollbarWidth"] <= 1.5, samples
             assert not errors, errors
             browser.close()
             print("PASS tab width stability:", samples)
